@@ -10,18 +10,18 @@ import "hardhat/console.sol";
 /// @notice A very basic example contract showing how to work with encrypted data using FHEVM.
 contract FHECounter is SepoliaConfig {
   euint32 private _count;
-  
+
   /// @notice Returns the current count
   /// @return The current encrypted count
   function getCount() external view returns (euint32) {
     return _count;
   }
-  
+
   mapping(address => euint32) private dataMapping;
-  
-  function getData() public view returns(euint32) {
+
+  function getData() public view returns (euint32) {
     return dataMapping[msg.sender];
-  } 
+  }
 
   /// @notice Increments the counter by a specified encrypted value.
   /// @param inputEuint32 the encrypted input value
@@ -37,7 +37,7 @@ contract FHECounter is SepoliaConfig {
     _count = FHE.add(_count, encryptedEuint32);
     dataMapping[msg.sender] = encryptedEuint32;
 
-  // allow both contract and user for each encrypted value
+    // allow both contract and user for each encrypted value
     FHE.allowThis(encryptedEuint32);
     FHE.allow(encryptedEuint32, msg.sender);
     FHE.allowThis(_count);
