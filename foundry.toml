@@ -1,0 +1,9 @@
+[fmt]
+line_length = 120
+tab_width = 2
+bracket_spacing = false
+int_types = "long"
+multiline_func_header = "all"
+quote_style = "double"
+number_underscore = "thousands"
+wrap_comments = true
