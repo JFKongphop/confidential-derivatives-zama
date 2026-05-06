@@ -40,6 +40,7 @@ contract PerpetualFutures is SepoliaConfig {
     uint256 positionId;
     address liquidator;
   }
+
   mapping(uint256 => LiquidationRequest) public pendingLiquidations;
 
   // ── Pending close requests ────────────────────────────────────────────────
@@ -49,48 +50,22 @@ contract PerpetualFutures is SepoliaConfig {
     uint256 positionId;
     uint256 currentPrice;
   }
+
   mapping(uint256 => CloseRequest) public pendingCloses;
 
   // ── Events ───────────────────────────────────────────────────────────────
 
   event PositionOpened(
-    address indexed user,
-    uint256 positionId,
-    bool isLong,
-    uint256 entryPrice,
-    uint256 collateralAmount
+    address indexed user, uint256 positionId, bool isLong, uint256 entryPrice, uint256 collateralAmount
   );
-  event PositionCloseRequested(
-    address indexed user,
-    uint256 positionId,
-    uint256 requestId
-  );
-  event PositionClosed(
-    address indexed user,
-    uint256 positionId,
-    uint256 exitPrice,
-    bool profitable
-  );
-  event LiquidationRequested(
-    address indexed user,
-    uint256 positionId,
-    address liquidator,
-    uint256 requestId
-  );
-  event Liquidated(
-    address indexed user,
-    uint256 positionId,
-    address indexed liquidator,
-    uint256 liquidationPrice
-  );
+  event PositionCloseRequested(address indexed user, uint256 positionId, uint256 requestId);
+  event PositionClosed(address indexed user, uint256 positionId, uint256 exitPrice, bool profitable);
+  event LiquidationRequested(address indexed user, uint256 positionId, address liquidator, uint256 requestId);
+  event Liquidated(address indexed user, uint256 positionId, address indexed liquidator, uint256 liquidationPrice);
 
   // ── Constructor ──────────────────────────────────────────────────────────
 
-  constructor(
-    address collateralAddr,
-    address oracleAddr,
-    address positionManagerAddr
-  ) {
+  constructor(address collateralAddr, address oracleAddr, address positionManagerAddr) {
     collateral = Collateral(collateralAddr);
     oracle = OracleIntegration(oracleAddr);
     positionManager = PositionManager(positionManagerAddr);
@@ -103,15 +78,8 @@ contract PerpetualFutures is SepoliaConfig {
   /// @param  collateralAmount Plain USDC amount (6 decimals) to lock as margin
   /// @param  leverage         Leverage multiplier (1–10)
   /// @return positionId       The new position identifier
-  function openPosition(
-    bool isLong,
-    uint64 collateralAmount,
-    uint64 leverage
-  ) external returns (uint256 positionId) {
-    require(
-      leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE,
-      "Invalid leverage"
-    );
+  function openPosition(bool isLong, uint64 collateralAmount, uint64 leverage) external returns (uint256 positionId) {
+    require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, "Invalid leverage");
     require(collateralAmount > 0, "Invalid collateral amount");
 
     uint256 currentPrice = oracle.getCurrentPrice();
@@ -132,21 +100,9 @@ contract PerpetualFutures is SepoliaConfig {
     // Deduct collateral from vault (encrypted op — no leak)
     collateral.decreaseCollateral(msg.sender, collateralAmount);
 
-    positionId = positionManager.addFuturesPosition(
-      msg.sender,
-      encSize,
-      encCollateral,
-      currentPrice,
-      isLong
-    );
+    positionId = positionManager.addFuturesPosition(msg.sender, encSize, encCollateral, currentPrice, isLong);
 
-    emit PositionOpened(
-      msg.sender,
-      positionId,
-      isLong,
-      currentPrice,
-      collateralAmount
-    );
+    emit PositionOpened(msg.sender, positionId, isLong, currentPrice, collateralAmount);
   }
 
   // ── Close position (async) ────────────────────────────────────────────────
@@ -154,11 +110,8 @@ contract PerpetualFutures is SepoliaConfig {
   /// @notice Initiate position close. Triggers async decryption of size & collateral
   ///         so P&L can be settled in the callback.
   /// @return requestId The decryption request identifier
-  function closePosition(
-    uint256 positionId
-  ) external returns (uint256 requestId) {
-    PositionManager.FuturesPosition memory pos = positionManager
-      .getFuturesPosition(msg.sender, positionId);
+  function closePosition(uint256 positionId) external returns (uint256 requestId) {
+    PositionManager.FuturesPosition memory pos = positionManager.getFuturesPosition(msg.sender, positionId);
 
     uint256 currentPrice = oracle.getCurrentPrice();
 
@@ -167,53 +120,36 @@ contract PerpetualFutures is SepoliaConfig {
     handles[1] = euint64.unwrap(pos.collateralUsed);
 
     requestId = FHE.requestDecryption(handles, this.fulfillClose.selector);
-    pendingCloses[requestId] = CloseRequest({
-      user: msg.sender,
-      positionId: positionId,
-      currentPrice: currentPrice
-    });
+    pendingCloses[requestId] = CloseRequest({user: msg.sender, positionId: positionId, currentPrice: currentPrice});
 
     emit PositionCloseRequested(msg.sender, positionId, requestId);
   }
 
   /// @notice Callback: settles P&L and returns collateral ± P&L to user.
-  function fulfillClose(
-    uint256 requestId,
-    bytes calldata cleartexts,
-    bytes calldata decryptionProof
-  ) external {
+  function fulfillClose(uint256 requestId, bytes calldata cleartexts, bytes calldata decryptionProof) external {
     FHE.checkSignatures(requestId, cleartexts, decryptionProof);
-    (uint64 decryptedSize, uint64 decryptedCollateral) = abi.decode(
-      cleartexts,
-      (uint64, uint64)
-    );
+    (uint64 decryptedSize, uint64 decryptedCollateral) = abi.decode(cleartexts, (uint64, uint64));
 
     CloseRequest memory req = pendingCloses[requestId];
     delete pendingCloses[requestId];
 
-    PositionManager.FuturesPosition memory pos = positionManager
-      .getFuturesPosition(req.user, req.positionId);
+    PositionManager.FuturesPosition memory pos = positionManager.getFuturesPosition(req.user, req.positionId);
 
     // Calculate P&L using public prices and decrypted size
     // P&L = (|currentPrice - entryPrice| / entryPrice) × collateral
-    uint256 delta = req.currentPrice > pos.entryPrice
-      ? req.currentPrice - pos.entryPrice
-      : pos.entryPrice - req.currentPrice;
+    uint256 delta =
+      req.currentPrice > pos.entryPrice ? req.currentPrice - pos.entryPrice : pos.entryPrice - req.currentPrice;
 
     // pnlAmount in USDC (6 dec): size × delta / entryPrice
     // (size = collateral × leverage, so this correctly scales P&L)
-    uint64 pnlAmount = uint64(
-      (uint256(decryptedSize) * delta) / pos.entryPrice
-    );
+    uint64 pnlAmount = uint64((uint256(decryptedSize) * delta) / pos.entryPrice);
 
     bool profitable = (req.currentPrice > pos.entryPrice) == pos.isLong;
 
     if (profitable) {
       collateral.increaseCollateral(req.user, decryptedCollateral + pnlAmount);
     } else {
-      uint64 returnAmt = pnlAmount < decryptedCollateral
-        ? decryptedCollateral - pnlAmount
-        : 0;
+      uint64 returnAmt = pnlAmount < decryptedCollateral ? decryptedCollateral - pnlAmount : 0;
       if (returnAmt > 0) {
         collateral.increaseCollateral(req.user, returnAmt);
       }
@@ -229,77 +165,46 @@ contract PerpetualFutures is SepoliaConfig {
   /// @notice Trigger a decryption-based liquidation check.
   ///         If the position is found underwater in the callback, it is liquidated
   ///         and the `liquidator` receives the bonus.
-  function liquidatePosition(
-    address user,
-    uint256 positionId
-  ) external returns (uint256 requestId) {
-    PositionManager.FuturesPosition memory pos = positionManager
-      .getFuturesPosition(user, positionId);
+  function liquidatePosition(address user, uint256 positionId) external returns (uint256 requestId) {
+    PositionManager.FuturesPosition memory pos = positionManager.getFuturesPosition(user, positionId);
 
     bytes32[] memory handles = new bytes32[](2);
     handles[0] = euint64.unwrap(pos.size);
     handles[1] = euint64.unwrap(pos.collateralUsed);
 
-    requestId = FHE.requestDecryption(
-      handles,
-      this.fulfillLiquidation.selector
-    );
-    pendingLiquidations[requestId] = LiquidationRequest({
-      user: user,
-      positionId: positionId,
-      liquidator: msg.sender
-    });
+    requestId = FHE.requestDecryption(handles, this.fulfillLiquidation.selector);
+    pendingLiquidations[requestId] = LiquidationRequest({user: user, positionId: positionId, liquidator: msg.sender});
 
     emit LiquidationRequested(user, positionId, msg.sender, requestId);
   }
 
   /// @notice Callback: verifies the position is underwater and executes liquidation.
-  function fulfillLiquidation(
-    uint256 requestId,
-    bytes calldata cleartexts,
-    bytes calldata decryptionProof
-  ) external {
+  function fulfillLiquidation(uint256 requestId, bytes calldata cleartexts, bytes calldata decryptionProof) external {
     FHE.checkSignatures(requestId, cleartexts, decryptionProof);
-    (uint64 decryptedSize, uint64 decryptedCollateral) = abi.decode(
-      cleartexts,
-      (uint64, uint64)
-    );
+    (uint64 decryptedSize, uint64 decryptedCollateral) = abi.decode(cleartexts, (uint64, uint64));
 
     LiquidationRequest memory req = pendingLiquidations[requestId];
     delete pendingLiquidations[requestId];
 
     uint256 currentPrice = oracle.getCurrentPrice();
 
-    PositionManager.FuturesPosition memory pos = positionManager
-      .getFuturesPosition(req.user, req.positionId);
+    PositionManager.FuturesPosition memory pos = positionManager.getFuturesPosition(req.user, req.positionId);
 
     // Maintenance required = collateral × 5%
-    uint64 maintenanceRequired = uint64(
-      (uint256(decryptedCollateral) * MAINTENANCE_MARGIN_BPS) / BPS_DENOMINATOR
-    );
+    uint64 maintenanceRequired = uint64((uint256(decryptedCollateral) * MAINTENANCE_MARGIN_BPS) / BPS_DENOMINATOR);
 
     // Mark-to-market loss in USDC (6 dec): size × delta / entryPrice
-    uint256 delta = currentPrice > pos.entryPrice
-      ? currentPrice - pos.entryPrice
-      : pos.entryPrice - currentPrice;
+    uint256 delta = currentPrice > pos.entryPrice ? currentPrice - pos.entryPrice : pos.entryPrice - currentPrice;
     uint64 mtmLoss = pos.isLong && currentPrice < pos.entryPrice
       ? uint64((uint256(decryptedSize) * delta) / pos.entryPrice)
-      : (
-        !pos.isLong && currentPrice > pos.entryPrice
-          ? uint64((uint256(decryptedSize) * delta) / pos.entryPrice)
-          : 0
-      );
+      : (!pos.isLong && currentPrice > pos.entryPrice ? uint64((uint256(decryptedSize) * delta) / pos.entryPrice) : 0);
 
-    uint64 remainingCollateral = mtmLoss < decryptedCollateral
-      ? decryptedCollateral - mtmLoss
-      : 0;
+    uint64 remainingCollateral = mtmLoss < decryptedCollateral ? decryptedCollateral - mtmLoss : 0;
 
     require(remainingCollateral < maintenanceRequired, "Not liquidatable");
 
     // Pay liquidator bonus from remaining collateral
-    uint64 bonus = uint64(
-      (uint256(decryptedCollateral) * LIQUIDATION_BONUS_BPS) / BPS_DENOMINATOR
-    );
+    uint64 bonus = uint64((uint256(decryptedCollateral) * LIQUIDATION_BONUS_BPS) / BPS_DENOMINATOR);
     if (bonus > 0) {
       collateral.increaseCollateral(req.liquidator, bonus);
     }
@@ -317,10 +222,7 @@ contract PerpetualFutures is SepoliaConfig {
   }
 
   /// @notice Returns the encrypted collateral handle for a position.
-  function getPositionCollateral(
-    uint256 positionId
-  ) external view returns (euint64) {
-    return
-      positionManager.getFuturesPosition(msg.sender, positionId).collateralUsed;
+  function getPositionCollateral(uint256 positionId) external view returns (euint64) {
+    return positionManager.getFuturesPosition(msg.sender, positionId).collateralUsed;
   }
 }

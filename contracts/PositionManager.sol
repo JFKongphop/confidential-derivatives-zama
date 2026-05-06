@@ -21,8 +21,7 @@ contract PositionManager is SepoliaConfig {
   }
 
   // user → positionId → position
-  mapping(address => mapping(uint256 => FuturesPosition))
-    public futuresPositions;
+  mapping(address => mapping(uint256 => FuturesPosition)) public futuresPositions;
   mapping(address => uint256) public futuresPositionCount; // next positionId
 
   // ── Option Position ──────────────────────────────────────────────────────
@@ -55,19 +54,9 @@ contract PositionManager is SepoliaConfig {
 
   // ── Events ───────────────────────────────────────────────────────────────
 
-  event FuturesPositionAdded(
-    address indexed user,
-    uint256 positionId,
-    uint256 entryPrice,
-    bool isLong
-  );
+  event FuturesPositionAdded(address indexed user, uint256 positionId, uint256 entryPrice, bool isLong);
   event FuturesPositionClosed(address indexed user, uint256 positionId);
-  event OptionPositionAdded(
-    uint256 indexed tokenId,
-    address writer,
-    bool isCall,
-    uint256 strikePrice
-  );
+  event OptionPositionAdded(uint256 indexed tokenId, address writer, bool isCall, uint256 strikePrice);
   event OptionPositionClosed(uint256 indexed tokenId);
 
   // ── Constructor ──────────────────────────────────────────────────────────
@@ -89,7 +78,11 @@ contract PositionManager is SepoliaConfig {
     euint64 collateralUsed,
     uint256 entryPrice,
     bool isLong
-  ) external onlyAuthorised returns (uint256 positionId) {
+  )
+    external
+    onlyAuthorised
+    returns (uint256 positionId)
+  {
     positionId = futuresPositionCount[user];
     futuresPositions[user][positionId] = FuturesPosition({
       size: size,
@@ -104,10 +97,7 @@ contract PositionManager is SepoliaConfig {
     emit FuturesPositionAdded(user, positionId, entryPrice, isLong);
   }
 
-  function getFuturesPosition(
-    address user,
-    uint256 positionId
-  ) external view returns (FuturesPosition memory) {
+  function getFuturesPosition(address user, uint256 positionId) external view returns (FuturesPosition memory) {
     require(futuresPositions[user][positionId].isOpen, "Position not open");
     return futuresPositions[user][positionId];
   }
@@ -117,16 +107,16 @@ contract PositionManager is SepoliaConfig {
     uint256 positionId,
     euint64 newSize,
     euint64 newCollateral
-  ) external onlyAuthorised {
+  )
+    external
+    onlyAuthorised
+  {
     require(futuresPositions[user][positionId].isOpen, "Position not open");
     futuresPositions[user][positionId].size = newSize;
     futuresPositions[user][positionId].collateralUsed = newCollateral;
   }
 
-  function removeFuturesPosition(
-    address user,
-    uint256 positionId
-  ) external onlyAuthorised {
+  function removeFuturesPosition(address user, uint256 positionId) external onlyAuthorised {
     require(futuresPositions[user][positionId].isOpen, "Position not open");
     delete futuresPositions[user][positionId];
     emit FuturesPositionClosed(user, positionId);
@@ -141,7 +131,11 @@ contract PositionManager is SepoliaConfig {
     uint256 strikePrice,
     uint256 expiryTime,
     bool isCall
-  ) external onlyAuthorised returns (uint256 tokenId) {
+  )
+    external
+    onlyAuthorised
+    returns (uint256 tokenId)
+  {
     tokenId = nextTokenId++;
     optionsByTokenId[tokenId] = OptionPosition({
       size: size,
@@ -159,17 +153,12 @@ contract PositionManager is SepoliaConfig {
     emit OptionPositionAdded(tokenId, writer, isCall, strikePrice);
   }
 
-  function getOptionPosition(
-    uint256 tokenId
-  ) external view returns (OptionPosition memory) {
+  function getOptionPosition(uint256 tokenId) external view returns (OptionPosition memory) {
     require(optionsByTokenId[tokenId].isOpen, "Option not open");
     return optionsByTokenId[tokenId];
   }
 
-  function setOptionHolder(
-    uint256 tokenId,
-    address holder
-  ) external onlyAuthorised {
+  function setOptionHolder(uint256 tokenId, address holder) external onlyAuthorised {
     require(optionsByTokenId[tokenId].isOpen, "Option not open");
     optionsByTokenId[tokenId].holder = holder;
   }

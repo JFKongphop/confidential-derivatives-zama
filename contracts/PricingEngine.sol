@@ -33,11 +33,12 @@ library PricingEngine {
     uint256 currentPrice,
     uint256 entryPrice,
     euint64 encryptedSize
-  ) internal returns (euint64 pnl) {
+  )
+    internal
+    returns (euint64 pnl)
+  {
     // Compute plain price delta first (stays public)
-    uint256 delta = currentPrice > entryPrice
-      ? currentPrice - entryPrice
-      : entryPrice - currentPrice;
+    uint256 delta = currentPrice > entryPrice ? currentPrice - entryPrice : entryPrice - currentPrice;
 
     // pnl = size × delta / entryPrice  (all in their respective precisions)
     // size(6dec) × delta(8dec) / entryPrice(8dec) → result in 6dec
@@ -63,17 +64,12 @@ library PricingEngine {
   /// @param  encryptedSize Encrypted position size
   /// @param  hoursOpen     Number of full hours the position has been open
   /// @return payment       Encrypted funding amount (positive = long pays short)
-  function calculateFundingPayment(
-    euint64 encryptedSize,
-    uint64 hoursOpen
-  ) internal returns (euint64 payment) {
+  function calculateFundingPayment(euint64 encryptedSize, uint64 hoursOpen) internal returns (euint64 payment) {
     // scalar = FUNDING_RATE_BPS * hoursOpen / BPS_DENOMINATOR
     // = 1 * hoursOpen / 10_000  → expressed in units of 1/10_000
     // We scale by SIZE_PRECISION to preserve precision:
     // payment = size * hoursOpen * FUNDING_RATE_BPS / BPS_DENOMINATOR
-    uint64 rateScaled = uint64(
-      (uint256(hoursOpen) * FUNDING_RATE_BPS * SIZE_PRECISION) / BPS_DENOMINATOR
-    );
+    uint64 rateScaled = uint64((uint256(hoursOpen) * FUNDING_RATE_BPS * SIZE_PRECISION) / BPS_DENOMINATOR);
     payment = FHE.mul(encryptedSize, FHE.asEuint64(rateScaled));
   }
 
@@ -85,10 +81,7 @@ library PricingEngine {
   /// @param  spotPrice   Current market price (8 decimals)
   /// @param  strikePrice Strike price         (8 decimals)
   /// @return premium     Estimated call premium (8 decimals)
-  function blackScholesCall(
-    uint256 spotPrice,
-    uint256 strikePrice
-  ) internal pure returns (uint256 premium) {
+  function blackScholesCall(uint256 spotPrice, uint256 strikePrice) internal pure returns (uint256 premium) {
     // Extrinsic value ≈ 4% of spot (approximation for 7-day, 20% IV)
     uint256 extrinsic = (spotPrice * 400) / BPS_DENOMINATOR; // 4% = 400 bps
 
@@ -107,10 +100,7 @@ library PricingEngine {
   /// @param  spotPrice   Current market price (8 decimals)
   /// @param  strikePrice Strike price         (8 decimals)
   /// @return premium     Estimated put premium (8 decimals)
-  function blackScholesPut(
-    uint256 spotPrice,
-    uint256 strikePrice
-  ) internal pure returns (uint256 premium) {
+  function blackScholesPut(uint256 spotPrice, uint256 strikePrice) internal pure returns (uint256 premium) {
     uint256 extrinsic = (spotPrice * 400) / BPS_DENOMINATOR; // 4%
 
     if (strikePrice >= spotPrice) {
@@ -128,11 +118,7 @@ library PricingEngine {
   /// @param  strikePrice  Strike price         (8 decimals)
   /// @param  isCall       true = call, false = put
   /// @return value        Settlement value (8 decimals); 0 if OTM
-  function getOptionValue(
-    uint256 currentPrice,
-    uint256 strikePrice,
-    bool isCall
-  ) internal pure returns (uint256 value) {
+  function getOptionValue(uint256 currentPrice, uint256 strikePrice, bool isCall) internal pure returns (uint256 value) {
     if (isCall) {
       value = currentPrice > strikePrice ? currentPrice - strikePrice : 0;
     } else {

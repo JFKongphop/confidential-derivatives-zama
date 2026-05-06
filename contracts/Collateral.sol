@@ -21,16 +21,13 @@ contract Collateral is SepoliaConfig {
     address user;
     uint64 amount;
   }
+
   mapping(uint256 => PendingWithdraw) public pendingWithdraws;
 
   // ── Events ───────────────────────────────────────────────────────────────
 
   event Deposit(address indexed user, uint256 amount);
-  event WithdrawRequested(
-    address indexed user,
-    uint256 amount,
-    uint256 requestId
-  );
+  event WithdrawRequested(address indexed user, uint256 amount, uint256 requestId);
   event Withdraw(address indexed user, uint256 amount);
 
   // ── Constructor ──────────────────────────────────────────────────────────
@@ -46,10 +43,7 @@ contract Collateral is SepoliaConfig {
   ///         Caller must have approved this contract for at least `amount`.
   function deposit(uint64 amount) external {
     require(amount > 0, "Invalid amount");
-    require(
-      token.transferFrom(msg.sender, address(this), amount),
-      "Transfer failed"
-    );
+    require(token.transferFrom(msg.sender, address(this), amount), "Transfer failed");
 
     euint64 enc = FHE.asEuint64(amount);
     _collateral[msg.sender] = FHE.add(_collateral[msg.sender], enc);
@@ -72,21 +66,14 @@ contract Collateral is SepoliaConfig {
     handles[0] = euint64.unwrap(_collateral[msg.sender]);
 
     requestId = FHE.requestDecryption(handles, this.fulfillWithdraw.selector);
-    pendingWithdraws[requestId] = PendingWithdraw({
-      user: msg.sender,
-      amount: amount
-    });
+    pendingWithdraws[requestId] = PendingWithdraw({user: msg.sender, amount: amount});
 
     emit WithdrawRequested(msg.sender, amount, requestId);
   }
 
   /// @notice Callback invoked by the Decryption Oracle after balance is revealed.
   ///         Verifies signatures, checks balance, and transfers tokens.
-  function fulfillWithdraw(
-    uint256 requestId,
-    bytes calldata cleartexts,
-    bytes calldata decryptionProof
-  ) external {
+  function fulfillWithdraw(uint256 requestId, bytes calldata cleartexts, bytes calldata decryptionProof) external {
     FHE.checkSignatures(requestId, cleartexts, decryptionProof);
     uint64 decryptedBalance = abi.decode(cleartexts, (uint64));
 
@@ -130,10 +117,7 @@ contract Collateral is SepoliaConfig {
   // ── Helpers called by Futures / Options contracts ─────────────────────────
 
   /// @notice Increase `user`'s encrypted balance by `amount`.
-  function increaseCollateral(
-    address user,
-    uint64 amount
-  ) external onlyAuthorised {
+  function increaseCollateral(address user, uint64 amount) external onlyAuthorised {
     euint64 enc = FHE.asEuint64(amount);
     _collateral[user] = FHE.add(_collateral[user], enc);
     FHE.allowThis(_collateral[user]);
@@ -142,10 +126,7 @@ contract Collateral is SepoliaConfig {
 
   /// @notice Decrease `user`'s encrypted balance by `amount`.
   ///         Caller is responsible for ensuring balance ≥ amount before calling.
-  function decreaseCollateral(
-    address user,
-    uint64 amount
-  ) external onlyAuthorised {
+  function decreaseCollateral(address user, uint64 amount) external onlyAuthorised {
     euint64 enc = FHE.asEuint64(amount);
     _collateral[user] = FHE.sub(_collateral[user], enc);
     FHE.allowThis(_collateral[user]);
@@ -154,17 +135,9 @@ contract Collateral is SepoliaConfig {
 
   /// @notice Encrypted transfer between two users. Uses FHE.select so the
   ///         deduction is clamped to balance if insufficient.
-  function transferCollateral(
-    address from,
-    address to,
-    uint64 amount
-  ) external onlyAuthorised {
+  function transferCollateral(address from, address to, uint64 amount) external onlyAuthorised {
     euint64 enc = FHE.asEuint64(amount);
-    euint64 actual = FHE.select(
-      FHE.ge(_collateral[from], enc),
-      enc,
-      FHE.asEuint64(0)
-    );
+    euint64 actual = FHE.select(FHE.ge(_collateral[from], enc), enc, FHE.asEuint64(0));
     _collateral[from] = FHE.sub(_collateral[from], actual);
     _collateral[to] = FHE.add(_collateral[to], actual);
 

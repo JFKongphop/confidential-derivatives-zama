@@ -45,6 +45,7 @@ contract OptionsPool is SepoliaConfig {
     uint256 tokenId;
     uint256 currentPrice;
   }
+
   mapping(uint256 => ExerciseRequest) public pendingExercises;
 
   // ── Events ────────────────────────────────────────────────────────────────
@@ -57,30 +58,14 @@ contract OptionsPool is SepoliaConfig {
     uint256 expiryTime,
     uint256 premiumPerContract
   );
-  event OptionBought(
-    uint256 indexed tokenId,
-    address indexed buyer,
-    uint256 premium
-  );
-  event ExerciseRequested(
-    uint256 indexed tokenId,
-    address indexed buyer,
-    uint256 requestId
-  );
-  event OptionExercised(
-    uint256 indexed tokenId,
-    address indexed buyer,
-    uint256 settlementAmount
-  );
+  event OptionBought(uint256 indexed tokenId, address indexed buyer, uint256 premium);
+  event ExerciseRequested(uint256 indexed tokenId, address indexed buyer, uint256 requestId);
+  event OptionExercised(uint256 indexed tokenId, address indexed buyer, uint256 settlementAmount);
   event OptionExpired(uint256 indexed tokenId);
 
   // ── Constructor ───────────────────────────────────────────────────────────
 
-  constructor(
-    address collateralAddr,
-    address oracleAddr,
-    address positionManagerAddr
-  ) {
+  constructor(address collateralAddr, address oracleAddr, address positionManagerAddr) {
     collateral = Collateral(collateralAddr);
     oracle = OracleIntegration(oracleAddr);
     positionManager = PositionManager(positionManagerAddr);
@@ -93,11 +78,7 @@ contract OptionsPool is SepoliaConfig {
   /// @param  strikePrice Strike price (8 decimals); must be in STRIKES array
   /// @param  size        USDC notional (6 decimals)
   /// @return tokenId     Newly minted option identifier
-  function mintOption(
-    bool isCall,
-    uint256 strikePrice,
-    uint64 size
-  ) external returns (uint256 tokenId) {
+  function mintOption(bool isCall, uint256 strikePrice, uint64 size) external returns (uint256 tokenId) {
     require(size > 0, "Invalid size");
     require(_isValidStrike(strikePrice), "Invalid strike");
 
@@ -111,12 +92,8 @@ contract OptionsPool is SepoliaConfig {
     // Required collateral = premium × size / spotPrice + size / 20
     // (premium is in 8 dec, size in 6 dec, spot in 8 dec)
     // → result in 6 dec
-    uint64 requiredCollateral = uint64(
-      (premiumPerContract * uint256(size)) /
-        spotPrice +
-        uint256(size) /
-        COLLATERAL_RATIO
-    );
+    uint64 requiredCollateral =
+      uint64((premiumPerContract * uint256(size)) / spotPrice + uint256(size) / COLLATERAL_RATIO);
 
     // Lock collateral from writer
     collateral.decreaseCollateral(msg.sender, requiredCollateral);
@@ -133,25 +110,13 @@ contract OptionsPool is SepoliaConfig {
     FHE.allow(encPremium, msg.sender);
 
     tokenId = positionManager.addOptionPosition(
-      msg.sender,
-      encSize,
-      encPremium,
-      strikePrice,
-      block.timestamp + TIME_TO_EXPIRY,
-      isCall
+      msg.sender, encSize, encPremium, strikePrice, block.timestamp + TIME_TO_EXPIRY, isCall
     );
 
     FHE.allowThis(encSize);
     FHE.allowThis(encPremium);
 
-    emit OptionMinted(
-      tokenId,
-      msg.sender,
-      isCall,
-      strikePrice,
-      block.timestamp + TIME_TO_EXPIRY,
-      premiumPerContract
-    );
+    emit OptionMinted(tokenId, msg.sender, isCall, strikePrice, block.timestamp + TIME_TO_EXPIRY, premiumPerContract);
   }
 
   // ── Buy option ────────────────────────────────────────────────────────────
@@ -160,8 +125,7 @@ contract OptionsPool is SepoliaConfig {
   ///         Premium is in 8-decimal price units, so we convert to 6-dec USDC.
   /// @param  tokenId The option to purchase
   function buyOption(uint256 tokenId) external {
-    PositionManager.OptionPosition memory opt = positionManager
-      .getOptionPosition(tokenId);
+    PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(tokenId);
 
     require(block.timestamp < opt.expiryTime, "Option expired");
     require(opt.holder == address(0), "Already sold");
@@ -175,9 +139,7 @@ contract OptionsPool is SepoliaConfig {
       : PricingEngine.blackScholesPut(spotPrice, opt.strikePrice);
 
     // Transfer premium (8 dec converted to 6 dec): premium * size / spot
-    uint64 totalPremium = uint64(
-      (premiumPerContract * /* opt.size as plain */ 1_000_000) / spotPrice
-    );
+    uint64 totalPremium = uint64((premiumPerContract /* opt.size as plain */ * 1_000_000) / spotPrice);
     // Note: In production, size would be decrypted; for MVP we use unit size = 1e6
 
     // Deduct premium from buyer and credit writer
@@ -199,11 +161,8 @@ contract OptionsPool is SepoliaConfig {
   ///         to compute the settlement amount.
   /// @param  tokenId The option token to exercise
   /// @return requestId The decryption request identifier
-  function exerciseOption(
-    uint256 tokenId
-  ) external returns (uint256 requestId) {
-    PositionManager.OptionPosition memory opt = positionManager
-      .getOptionPosition(tokenId);
+  function exerciseOption(uint256 tokenId) external returns (uint256 requestId) {
+    PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(tokenId);
 
     require(opt.holder == msg.sender, "Not option holder");
     require(block.timestamp < opt.expiryTime, "Option expired");
@@ -211,49 +170,30 @@ contract OptionsPool is SepoliaConfig {
     uint256 currentPrice = oracle.getCurrentPrice();
 
     // Verify the option is in-the-money before decrypting (saves gas if OTM)
-    require(
-      PricingEngine.getOptionValue(currentPrice, opt.strikePrice, opt.isCall) >
-        0,
-      "Option out of the money"
-    );
+    require(PricingEngine.getOptionValue(currentPrice, opt.strikePrice, opt.isCall) > 0, "Option out of the money");
 
     bytes32[] memory handles = new bytes32[](1);
     handles[0] = euint64.unwrap(opt.size);
 
     requestId = FHE.requestDecryption(handles, this.fulfillExercise.selector);
-    pendingExercises[requestId] = ExerciseRequest({
-      buyer: msg.sender,
-      tokenId: tokenId,
-      currentPrice: currentPrice
-    });
+    pendingExercises[requestId] = ExerciseRequest({buyer: msg.sender, tokenId: tokenId, currentPrice: currentPrice});
 
     emit ExerciseRequested(tokenId, msg.sender, requestId);
   }
 
   /// @notice Callback: computes settlement and pays buyer.
-  function fulfillExercise(
-    uint256 requestId,
-    bytes calldata cleartexts,
-    bytes calldata decryptionProof
-  ) external {
+  function fulfillExercise(uint256 requestId, bytes calldata cleartexts, bytes calldata decryptionProof) external {
     FHE.checkSignatures(requestId, cleartexts, decryptionProof);
     uint64 decryptedSize = abi.decode(cleartexts, (uint64));
 
     ExerciseRequest memory req = pendingExercises[requestId];
     delete pendingExercises[requestId];
 
-    PositionManager.OptionPosition memory opt = positionManager
-      .getOptionPosition(req.tokenId);
+    PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(req.tokenId);
 
     // Settlement in USDC (6 dec): (priceDelta / currentPrice) × size
-    uint256 priceDelta = PricingEngine.getOptionValue(
-      req.currentPrice,
-      opt.strikePrice,
-      opt.isCall
-    );
-    uint64 settlement = uint64(
-      (priceDelta * uint256(decryptedSize)) / req.currentPrice
-    );
+    uint256 priceDelta = PricingEngine.getOptionValue(req.currentPrice, opt.strikePrice, opt.isCall);
+    uint64 settlement = uint64((priceDelta * uint256(decryptedSize)) / req.currentPrice);
 
     if (settlement > 0) {
       // Transfer settlement from writer's collateral to buyer
@@ -267,8 +207,7 @@ contract OptionsPool is SepoliaConfig {
 
   /// @notice Expire an OTM / unexercised option, releasing writer collateral.
   function expireOption(uint256 tokenId) external {
-    PositionManager.OptionPosition memory opt = positionManager
-      .getOptionPosition(tokenId);
+    PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(tokenId);
     require(block.timestamp >= opt.expiryTime, "Not yet expired");
     positionManager.removeOptionPosition(tokenId);
     emit OptionExpired(tokenId);
