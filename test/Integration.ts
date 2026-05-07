@@ -21,36 +21,40 @@ import {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const PRICE_2000  = 200_000_000_000n;
-const PRICE_2500  = 250_000_000_000n;
-const PRICE_1500  = 150_000_000_000n;
+const PRICE_2000 = 200_000_000_000n;
+const PRICE_2500 = 250_000_000_000n;
+const PRICE_1500 = 150_000_000_000n;
 const STRIKE_2000 = 200_000_000_000n;
-const DECIMALS_6  = 1_000_000n;
-const USER_MINT   = 50_000n * DECIMALS_6;
+const DECIMALS_6 = 1_000_000n;
+const USER_MINT = 50_000n * DECIMALS_6;
 const OPTION_SIZE = 1n * DECIMALS_6;
-const MARGIN      = 2_000n * DECIMALS_6;
+const MARGIN = 2_000n * DECIMALS_6;
 
 type Signers = {
-  deployer:   HardhatEthersSigner;
-  alice:      HardhatEthersSigner;
-  bob:        HardhatEthersSigner;
+  deployer: HardhatEthersSigner;
+  alice: HardhatEthersSigner;
+  bob: HardhatEthersSigner;
   liquidator: HardhatEthersSigner;
 };
 
 interface Suite {
-  token:           MockConfidentialToken;
-  feed:            MockPriceFeed;
-  collateral:      Collateral;
+  token: MockConfidentialToken;
+  feed: MockPriceFeed;
+  collateral: Collateral;
   positionManager: PositionManager;
-  futures:         PerpetualFutures;
-  options:         OptionsPool;
+  futures: PerpetualFutures;
+  options: OptionsPool;
 }
 
 async function deployAll(deployer: HardhatEthersSigner): Promise<Suite> {
-  const token           = await new MockConfidentialToken__factory(deployer).deploy();
-  const feed            = await new MockPriceFeed__factory(deployer).deploy(PRICE_2000);
-  const oracle          = await new OracleIntegration__factory(deployer).deploy(await feed.getAddress());
-  const collateral      = await new Collateral__factory(deployer).deploy(await token.getAddress());
+  const token = await new MockConfidentialToken__factory(deployer).deploy();
+  const feed = await new MockPriceFeed__factory(deployer).deploy(PRICE_2000);
+  const oracle = await new OracleIntegration__factory(deployer).deploy(
+    await feed.getAddress(),
+  );
+  const collateral = await new Collateral__factory(deployer).deploy(
+    await token.getAddress(),
+  );
   const positionManager = await new PositionManager__factory(deployer).deploy();
 
   const futures = await new PerpetualFutures__factory(deployer).deploy(
@@ -102,7 +106,9 @@ async function encryptOpenPosition(
   input.add64(collateralAmount);
   input.addBool(isLong);
   const { handles, inputProof } = await input.encrypt();
-  return futures.connect(user).openPosition(handles[0], inputProof, leverage, handles[1]);
+  return futures
+    .connect(user)
+    .openPosition(handles[0], inputProof, leverage, handles[1]);
 }
 
 async function doFulfillClose(
@@ -111,8 +117,18 @@ async function doFulfillClose(
   caller: HardhatEthersSigner,
 ): Promise<void> {
   const pending = await futures.pendingCloses(requestId);
-  const result = await fhevm.publicDecrypt([pending.sizeHandle, pending.collateralHandle, pending.isLongHandle]);
-  await futures.connect(caller).fulfillClose(requestId, result.abiEncodedClearValues, result.decryptionProof);
+  const result = await fhevm.publicDecrypt([
+    pending.sizeHandle,
+    pending.collateralHandle,
+    pending.isLongHandle,
+  ]);
+  await futures
+    .connect(caller)
+    .fulfillClose(
+      requestId,
+      result.abiEncodedClearValues,
+      result.decryptionProof,
+    );
 }
 
 async function doFulfillLiquidation(
@@ -121,8 +137,18 @@ async function doFulfillLiquidation(
   caller: HardhatEthersSigner,
 ): Promise<void> {
   const pending = await futures.pendingLiquidations(requestId);
-  const result = await fhevm.publicDecrypt([pending.sizeHandle, pending.collateralHandle, pending.isLongHandle]);
-  await futures.connect(caller).fulfillLiquidation(requestId, result.abiEncodedClearValues, result.decryptionProof);
+  const result = await fhevm.publicDecrypt([
+    pending.sizeHandle,
+    pending.collateralHandle,
+    pending.isLongHandle,
+  ]);
+  await futures
+    .connect(caller)
+    .fulfillLiquidation(
+      requestId,
+      result.abiEncodedClearValues,
+      result.decryptionProof,
+    );
 }
 
 async function doFulfillExercise(
@@ -131,8 +157,19 @@ async function doFulfillExercise(
   caller: HardhatEthersSigner,
 ): Promise<void> {
   const pending = await options.pendingExercises(requestId);
-  const result = await fhevm.publicDecrypt([pending.sizeHandle]);
-  await options.connect(caller).fulfillExercise(requestId, result.abiEncodedClearValues, result.decryptionProof);
+  const result = await fhevm.publicDecrypt([
+    pending.itmHandle,
+    pending.sizeHandle,
+    pending.strikeHandle,
+    pending.isCallHandle,
+  ]);
+  await options
+    .connect(caller)
+    .fulfillExercise(
+      requestId,
+      result.abiEncodedClearValues,
+      result.decryptionProof,
+    );
 }
 
 async function getBalance(
@@ -153,7 +190,12 @@ describe("Futures + Options Integration", function () {
 
   before(async function () {
     const all = await ethers.getSigners();
-    signers = { deployer: all[0], alice: all[1], bob: all[2], liquidator: all[3] };
+    signers = {
+      deployer: all[0],
+      alice: all[1],
+      bob: all[2],
+      liquidator: all[3],
+    };
   });
 
   beforeEach(async function () {
@@ -174,15 +216,17 @@ describe("Futures + Options Integration", function () {
   it("user hedges long futures position with a put option (crash scenario)", async function () {
     // Alice: writer mints put, bob buys it as insurance on alice's long
     // (simplified: alice opens long, bob writes and alice buys put)
-    const writeTx      = await s.options.connect(signers.bob).mintOption(false, STRIKE_2000, OPTION_SIZE);
+    const writeTx = await s.options
+      .connect(signers.bob)
+      .mintOption(false, STRIKE_2000, OPTION_SIZE);
     const writeReceipt = await writeTx.wait();
-    const writeEvent   = writeReceipt!.logs
+    const writeEvent = writeReceipt!.logs
       .map((l) => s.options.interface.parseLog(l))
       .find((e) => e?.name === "OptionMinted");
     const putTokenId = writeEvent!.args.tokenId;
 
     // Alice opens long futures
-await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
+    await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
 
     // Alice buys the put from bob as hedge
     await s.options.connect(signers.alice).buyOption(putTokenId);
@@ -190,7 +234,11 @@ await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
     // Price crashes to $1500
     await s.feed.setPrice(PRICE_1500);
 
-    const aliceBefore = await getBalance(s.collateral, signers.alice, collateralAddr);
+    const aliceBefore = await getBalance(
+      s.collateral,
+      signers.alice,
+      collateralAddr,
+    );
 
     // Alice closes losing long (returns partial collateral)
     const closeTx = await s.futures.connect(signers.alice).closePosition(0n);
@@ -201,14 +249,20 @@ await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
     await doFulfillClose(s.futures, closeEvent!.args.requestId, signers.alice);
 
     // Alice exercises ITM put — receives settlement
-    const exTx = await s.options.connect(signers.alice).exerciseOption(putTokenId);
+    const exTx = await s.options
+      .connect(signers.alice)
+      .exerciseOption(putTokenId);
     const exReceipt = await exTx.wait();
     const exEvent = exReceipt!.logs
       .map((l) => s.options.interface.parseLog(l))
       .find((e) => e?.name === "ExerciseRequested");
     await doFulfillExercise(s.options, exEvent!.args.requestId, signers.alice);
 
-    const aliceAfter = await getBalance(s.collateral, signers.alice, collateralAddr);
+    const aliceAfter = await getBalance(
+      s.collateral,
+      signers.alice,
+      collateralAddr,
+    );
 
     // The put settlement partially offsets the futures loss
     // Net should be more than just the futures loss alone
@@ -222,9 +276,11 @@ await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
     await encryptOpenPosition(s.futures, signers.alice, false, MARGIN, 2n);
 
     // Bob writes a call, alice buys it as hedge
-    const writeTx      = await s.options.connect(signers.bob).mintOption(true, STRIKE_2000, OPTION_SIZE);
+    const writeTx = await s.options
+      .connect(signers.bob)
+      .mintOption(true, STRIKE_2000, OPTION_SIZE);
     const writeReceipt = await writeTx.wait();
-    const writeEvent   = writeReceipt!.logs
+    const writeEvent = writeReceipt!.logs
       .map((l) => s.options.interface.parseLog(l))
       .find((e) => e?.name === "OptionMinted");
     const callTokenId = writeEvent!.args.tokenId;
@@ -233,23 +289,33 @@ await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
     // Price rallies to $2500 — short loses, call wins
     await s.feed.setPrice(PRICE_2500);
 
-    const aliceBefore = await getBalance(s.collateral, signers.alice, collateralAddr);
+    const aliceBefore = await getBalance(
+      s.collateral,
+      signers.alice,
+      collateralAddr,
+    );
 
-    const closeTx = await s.futures.connect(signers.alice).closePosition(0n);      // loss on short
+    const closeTx = await s.futures.connect(signers.alice).closePosition(0n); // loss on short
     const closeReceipt = await closeTx.wait();
     const closeEvent = closeReceipt!.logs
       .map((l) => s.futures.interface.parseLog(l))
       .find((e) => e?.name === "PositionCloseRequested");
     await doFulfillClose(s.futures, closeEvent!.args.requestId, signers.alice);
 
-    const exTx = await s.options.connect(signers.alice).exerciseOption(callTokenId); // gain on call
+    const exTx = await s.options
+      .connect(signers.alice)
+      .exerciseOption(callTokenId); // gain on call
     const exReceipt = await exTx.wait();
     const exEvent = exReceipt!.logs
       .map((l) => s.options.interface.parseLog(l))
       .find((e) => e?.name === "ExerciseRequested");
     await doFulfillExercise(s.options, exEvent!.args.requestId, signers.alice);
 
-    const aliceAfter = await getBalance(s.collateral, signers.alice, collateralAddr);
+    const aliceAfter = await getBalance(
+      s.collateral,
+      signers.alice,
+      collateralAddr,
+    );
 
     // The call offsets the short futures loss
     expect(aliceAfter).to.be.greaterThan(aliceBefore);
@@ -259,13 +325,17 @@ await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
 
   it("multiple users can open and close positions independently", async function () {
     // Alice: long, Bob: short
-    await encryptOpenPosition(s.futures, signers.alice, true,  MARGIN, 2n);
-    await encryptOpenPosition(s.futures, signers.bob,   false, MARGIN, 2n);
+    await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
+    await encryptOpenPosition(s.futures, signers.bob, false, MARGIN, 2n);
 
     // Price moves up → alice profitable, bob at loss
     await s.feed.setPrice(PRICE_2500);
 
-    const aliceBefore = await getBalance(s.collateral, signers.alice, collateralAddr);
+    const aliceBefore = await getBalance(
+      s.collateral,
+      signers.alice,
+      collateralAddr,
+    );
 
     const closeTx = await s.futures.connect(signers.alice).closePosition(0n);
     const closeReceipt = await closeTx.wait();
@@ -273,7 +343,11 @@ await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
       .map((l) => s.futures.interface.parseLog(l))
       .find((e) => e?.name === "PositionCloseRequested");
     await doFulfillClose(s.futures, closeEvent!.args.requestId, signers.alice);
-    const aliceAfter  = await getBalance(s.collateral, signers.alice, collateralAddr);
+    const aliceAfter = await getBalance(
+      s.collateral,
+      signers.alice,
+      collateralAddr,
+    );
 
     expect(aliceAfter).to.be.greaterThan(aliceBefore); // alice profited
 
@@ -295,23 +369,40 @@ await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
     // Bob: conservative 2× long
     await encryptOpenPosition(s.futures, signers.bob, true, MARGIN, 2n);
 
-    const bobBefore = await getBalance(s.collateral, signers.bob, collateralAddr);
+    const bobBefore = await getBalance(
+      s.collateral,
+      signers.bob,
+      collateralAddr,
+    );
 
     // Price crashes — alice is liquidatable
     await s.feed.setPrice(PRICE_1500);
-    const liqTx = await s.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, 0n);
+    const liqTx = await s.futures
+      .connect(signers.liquidator)
+      .liquidatePosition(signers.alice.address, 0n);
     const liqReceipt = await liqTx.wait();
     const liqEvent = liqReceipt!.logs
       .map((l) => s.futures.interface.parseLog(l))
       .find((e) => e?.name === "LiquidationRequested");
-    await doFulfillLiquidation(s.futures, liqEvent!.args.requestId, signers.liquidator);
+    await doFulfillLiquidation(
+      s.futures,
+      liqEvent!.args.requestId,
+      signers.liquidator,
+    );
 
     // Bob's collateral should be unchanged (his position is still open)
-    const bobAfter = await getBalance(s.collateral, signers.bob, collateralAddr);
+    const bobAfter = await getBalance(
+      s.collateral,
+      signers.bob,
+      collateralAddr,
+    );
     expect(bobAfter).to.equal(bobBefore);
 
     // Bob's position still exists
-    const bobPos = await s.positionManager.getFuturesPosition(signers.bob.address, 0n);
+    const bobPos = await s.positionManager.getFuturesPosition(
+      signers.bob.address,
+      0n,
+    );
     expect(bobPos.isOpen).to.be.true;
   });
 
@@ -321,22 +412,29 @@ await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 2n);
     // Charlie (alice) uses a single deposit for futures margin and option premium
 
     // Use some collateral for futures
-await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 1n);
+    await encryptOpenPosition(s.futures, signers.alice, true, MARGIN, 1n);
 
     // Use remaining for buying an option
-    const writeTx      = await s.options.connect(signers.bob).mintOption(true, STRIKE_2000, OPTION_SIZE);
+    const writeTx = await s.options
+      .connect(signers.bob)
+      .mintOption(true, STRIKE_2000, OPTION_SIZE);
     const writeReceipt = await writeTx.wait();
-    const writeEvent   = writeReceipt!.logs
+    const writeEvent = writeReceipt!.logs
       .map((l) => s.options.interface.parseLog(l))
       .find((e) => e?.name === "OptionMinted");
     const tokenId = writeEvent!.args.tokenId;
 
-    await expect(
-      s.options.connect(signers.alice).buyOption(tokenId),
-    ).to.emit(s.options, "OptionBought");
+    await expect(s.options.connect(signers.alice).buyOption(tokenId)).to.emit(
+      s.options,
+      "OptionBought",
+    );
 
     // Alice still has a positive encrypted balance
-    const aliceBal = await getBalance(s.collateral, signers.alice, collateralAddr);
+    const aliceBal = await getBalance(
+      s.collateral,
+      signers.alice,
+      collateralAddr,
+    );
     expect(aliceBal).to.be.greaterThan(0n);
   });
 
