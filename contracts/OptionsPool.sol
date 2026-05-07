@@ -67,14 +67,30 @@ contract OptionsPool is ZamaEthereumConfig {
     uint256 expiryTime,
     uint256 premiumPerContract
   );
-  event OptionBought(uint256 indexed tokenId, address indexed buyer, uint256 premium);
-  event ExerciseRequested(uint256 indexed tokenId, address indexed buyer, uint256 requestId);
-  event OptionExercised(uint256 indexed tokenId, address indexed buyer, uint256 settlementAmount);
+  event OptionBought(
+    uint256 indexed tokenId, 
+    address indexed buyer, 
+    uint256 premium
+  );
+  event ExerciseRequested(
+    uint256 indexed tokenId, 
+    address indexed buyer, 
+    uint256 requestId
+  );
+  event OptionExercised(
+    uint256 indexed tokenId, 
+    address indexed buyer, 
+    uint256 settlementAmount
+  );
   event OptionExpired(uint256 indexed tokenId);
 
   // ── Constructor ───────────────────────────────────────────────────────────
 
-  constructor(address collateralAddr, address oracleAddr, address positionManagerAddr) {
+  constructor(
+    address collateralAddr, 
+    address oracleAddr, 
+    address positionManagerAddr
+  ) {
     collateral = Collateral(collateralAddr);
     oracle = OracleIntegration(oracleAddr);
     positionManager = PositionManager(positionManagerAddr);
@@ -87,22 +103,30 @@ contract OptionsPool is ZamaEthereumConfig {
   /// @param  strikePrice Strike price (8 decimals); must be in STRIKES array
   /// @param  size        USDC notional (6 decimals)
   /// @return tokenId     Newly minted option identifier
-  function mintOption(bool isCall, uint256 strikePrice, uint64 size) external returns (uint256 tokenId) {
+  function mintOption(
+    bool isCall, 
+    uint256 strikePrice, 
+    uint64 size
+  ) external returns (uint256 tokenId) {
     require(size > 0, "Invalid size");
     require(_isValidStrike(strikePrice), "Invalid strike");
 
     uint256 spotPrice = oracle.getCurrentPrice();
 
     // Compute premium using simplified Black-Scholes
-    uint256 premiumPerContract = isCall
-      ? PricingEngine.blackScholesCall(spotPrice, strikePrice)
-      : PricingEngine.blackScholesPut(spotPrice, strikePrice);
+    uint256 call = PricingEngine.blackScholesCall(spotPrice, strikePrice);
+    uint256 put = PricingEngine.blackScholesPut(spotPrice, strikePrice);
+    uint256 premiumPerContract = isCall ? call : put;
 
     // Required collateral = premium × size / spotPrice + size / 20
     // (premium is in 8 dec, size in 6 dec, spot in 8 dec)
     // → result in 6 dec
     uint64 requiredCollateral =
-      uint64((premiumPerContract * uint256(size)) / spotPrice + uint256(size) / COLLATERAL_RATIO);
+      uint64(
+        (premiumPerContract * uint256(size)) 
+        / spotPrice + uint256(size) 
+        / COLLATERAL_RATIO
+      );
 
     // Lock collateral from writer
     collateral.decreaseCollateral(msg.sender, requiredCollateral);
@@ -119,14 +143,26 @@ contract OptionsPool is ZamaEthereumConfig {
     FHE.allow(encPremium, msg.sender);
 
     tokenId = positionManager.addOptionPosition(
-      msg.sender, encSize, encPremium, strikePrice, block.timestamp + TIME_TO_EXPIRY, isCall
+      msg.sender, 
+      encSize, 
+      encPremium, 
+      strikePrice, 
+      block.timestamp + TIME_TO_EXPIRY, 
+      isCall
     );
     _writerLockedCollateral[tokenId] = requiredCollateral;
 
     FHE.allowThis(encSize);
     FHE.allowThis(encPremium);
 
-    emit OptionMinted(tokenId, msg.sender, isCall, strikePrice, block.timestamp + TIME_TO_EXPIRY, premiumPerContract);
+    emit OptionMinted(
+      tokenId, 
+      msg.sender, 
+      isCall, 
+      strikePrice, 
+      block.timestamp + TIME_TO_EXPIRY, 
+      premiumPerContract
+    );
   }
 
   // ── Buy option ────────────────────────────────────────────────────────────
@@ -180,7 +216,10 @@ contract OptionsPool is ZamaEthereumConfig {
     uint256 currentPrice = oracle.getCurrentPrice();
 
     // Verify the option is in-the-money before decrypting (saves gas if OTM)
-    require(PricingEngine.getOptionValue(currentPrice, opt.strikePrice, opt.isCall) > 0, "Option out of the money");
+    require(
+      PricingEngine.getOptionValue(currentPrice, opt.strikePrice, opt.isCall) > 0, 
+      "Option out of the money"
+    );
 
     bytes32 sizeH = euint64.unwrap(opt.size);
     FHE.makePubliclyDecryptable(opt.size);
@@ -193,7 +232,11 @@ contract OptionsPool is ZamaEthereumConfig {
   }
 
   /// @notice Callback: computes settlement and pays buyer.
-  function fulfillExercise(uint256 requestId, bytes calldata abiEncodedCleartexts, bytes calldata decryptionProof) external {
+  function fulfillExercise(
+    uint256 requestId, 
+    bytes calldata abiEncodedCleartexts, 
+    bytes calldata decryptionProof
+  ) external {
     ExerciseRequest memory req = pendingExercises[requestId];
     require(req.buyer != address(0), "Unknown request");
 

@@ -88,7 +88,7 @@ contract PositionManager is ZamaEthereumConfig {
     address user,
     euint64 size,
     euint64 collateralUsed,
-    ebool   isLong,
+    ebool isLong,
     uint256 entryPrice
   )
     external
