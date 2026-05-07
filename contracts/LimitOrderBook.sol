@@ -214,7 +214,7 @@ contract LimitOrderBook is ZamaEthereumConfig {
     handles[3] = req.isLongHandle;
 
     FHE.checkSignatures(handles, abiEncodedCleartexts, decryptionProof);
-    (bool triggered, uint64 decryptedCollateral, , bool decryptedIsLong) = abi.decode(
+    (bool triggered, uint64 decryptedCollateral, , ) = abi.decode(
       abiEncodedCleartexts,
       (bool, uint64, uint64, bool)
     );
