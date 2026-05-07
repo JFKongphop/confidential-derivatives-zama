@@ -27,15 +27,15 @@ contract PositionManager is ZamaEthereumConfig {
   // ── Option Position ──────────────────────────────────────────────────────
 
   struct OptionPosition {
-    euint64 size; // Encrypted notional size
-    euint64 premium; // Encrypted premium paid by buyer
-    uint256 strikePrice; // Public strike (8 decimals)
-    uint256 expiryTime; // Public expiry timestamp
-    address writer; // Option writer
-    address holder; // Current holder (set after buyOption)
-    uint256 tokenId; // Unique option token ID
-    bool isCall; // Call=true, Put=false
-    bool isOpen; // Existence flag
+    euint64 size;        // Encrypted notional size
+    euint64 premium;     // Encrypted premium paid by buyer
+    euint64 strikePrice; // Encrypted strike price (8 decimals)
+    ebool isCall;      // Encrypted direction: true=call, false=put
+    uint256 expiryTime;  // Public expiry timestamp
+    address writer;      // Option writer
+    address holder;      // Current holder (set after buyOption)
+    uint256 tokenId;     // Unique option token ID
+    bool isOpen;      // Existence flag
   }
 
   mapping(uint256 => OptionPosition) public optionsByTokenId;
@@ -65,9 +65,7 @@ contract PositionManager is ZamaEthereumConfig {
   );
   event OptionPositionAdded(
     uint256 indexed tokenId, 
-    address writer, 
-    bool isCall, 
-    uint256 strikePrice
+    address writer
   );
   event OptionPositionClosed(uint256 indexed tokenId);
 
@@ -140,9 +138,9 @@ contract PositionManager is ZamaEthereumConfig {
     address writer,
     euint64 size,
     euint64 premium,
-    uint256 strikePrice,
-    uint256 expiryTime,
-    bool isCall
+    euint64 strikePrice,
+    ebool isCall,
+    uint256 expiryTime
   )
     external
     onlyAuthorised
@@ -153,16 +151,16 @@ contract PositionManager is ZamaEthereumConfig {
       size: size,
       premium: premium,
       strikePrice: strikePrice,
+      isCall: isCall,
       expiryTime: expiryTime,
       writer: writer,
       holder: address(0),
       tokenId: tokenId,
-      isCall: isCall,
       isOpen: true
     });
     userOptionTokenIds[writer].push(tokenId);
 
-    emit OptionPositionAdded(tokenId, writer, isCall, strikePrice);
+    emit OptionPositionAdded(tokenId, writer);
   }
 
   function getOptionPosition(uint256 tokenId) external view returns (OptionPosition memory) {
