@@ -131,6 +131,17 @@ contract Collateral is ZamaEthereumConfig {
     FHE.allow(_collateral[user], user);
   }
 
+  /// @notice Decrease `user`'s encrypted balance by an already-encrypted `amount`.
+  ///         Used by PerpetualFutures when collateral is supplied as encrypted input.
+  ///         Clamped to available balance — never underflows.
+  function decreaseCollateralEnc(address user, euint64 amount) external onlyAuthorised {
+    FHE.allowThis(amount); // ensure this contract can read the handle
+    euint64 actual = FHE.select(FHE.ge(_collateral[user], amount), amount, _collateral[user]);
+    _collateral[user] = FHE.sub(_collateral[user], actual);
+    FHE.allowThis(_collateral[user]);
+    FHE.allow(_collateral[user], user);
+  }
+
   /// @notice Encrypted transfer between two users. Uses FHE.select so the
   ///         deduction is clamped to balance if insufficient.
   function transferCollateral(address from, address to, uint64 amount) external onlyAuthorised {
