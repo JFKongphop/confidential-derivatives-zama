@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {FHE, euint64} from "@fhevm/solidity/lib/FHE.sol";
+import {FHE, euint64, ebool} from "@fhevm/solidity/lib/FHE.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {Collateral} from "./Collateral.sol";
 import {OracleIntegration} from "./OracleIntegration.sol";
@@ -42,9 +42,12 @@ contract OptionsPool is ZamaEthereumConfig {
 
   uint256 private _nextRequestId = 1;
 
-  /// @dev Tracks collateral locked by each writer per option token.
+  /// @dev Caches the plaintext premium at mint time for use in buyOption.
+  mapping(uint256 => uint64) private _premiumCache;
+
+  /// @dev Tracks collateral locked by each writer per option token (encrypted).
   ///      Used to return the writer's margin when an option expires worthless.
-  mapping(uint256 => uint64) private _writerLockedCollateral;
+  mapping(uint256 => euint64) private _writerLockedCollateral;
 
   // ── Pending exercise requests ──────────────────────────────────────────────
 
@@ -52,7 +55,10 @@ contract OptionsPool is ZamaEthereumConfig {
     address buyer;
     uint256 tokenId;
     uint256 currentPrice;
+    bytes32 itmHandle;
     bytes32 sizeHandle;
+    bytes32 strikeHandle;
+    bytes32 isCallHandle;
   }
 
   mapping(uint256 => ExerciseRequest) public pendingExercises;
@@ -62,8 +68,6 @@ contract OptionsPool is ZamaEthereumConfig {
   event OptionMinted(
     uint256 indexed tokenId,
     address indexed writer,
-    bool isCall,
-    uint256 strikePrice,
     uint256 expiryTime,
     uint256 premiumPerContract
   );
@@ -131,8 +135,10 @@ contract OptionsPool is ZamaEthereumConfig {
     // Lock collateral from writer
     collateral.decreaseCollateral(msg.sender, requiredCollateral);
 
-    euint64 encSize = FHE.asEuint64(size);
+    euint64 encSize    = FHE.asEuint64(size);
     euint64 encPremium = FHE.asEuint64(uint64(premiumPerContract));
+    euint64 encStrike  = FHE.asEuint64(uint64(strikePrice));
+    ebool encIsCall  = FHE.asEbool(isCall);
 
     // Grant ACL permissions before passing handles to PositionManager
     FHE.allowThis(encSize);
@@ -141,26 +147,35 @@ contract OptionsPool is ZamaEthereumConfig {
     FHE.allowThis(encPremium);
     FHE.allow(encPremium, address(positionManager));
     FHE.allow(encPremium, msg.sender);
+    FHE.allowThis(encStrike);
+    FHE.allow(encStrike, address(positionManager));
+    FHE.allow(encStrike, msg.sender);
+    FHE.allowThis(encIsCall);
+    FHE.allow(encIsCall, address(positionManager));
+    FHE.allow(encIsCall, msg.sender);
 
     tokenId = positionManager.addOptionPosition(
-      msg.sender, 
-      encSize, 
-      encPremium, 
-      strikePrice, 
-      block.timestamp + TIME_TO_EXPIRY, 
-      isCall
+      msg.sender,
+      encSize,
+      encPremium,
+      encStrike,
+      encIsCall,
+      block.timestamp + TIME_TO_EXPIRY
     );
-    _writerLockedCollateral[tokenId] = requiredCollateral;
+
+    _premiumCache[tokenId] = uint64(premiumPerContract);
+
+    euint64 encCollateral = FHE.asEuint64(requiredCollateral);
+    FHE.allowThis(encCollateral);
+    _writerLockedCollateral[tokenId] = encCollateral;
 
     FHE.allowThis(encSize);
     FHE.allowThis(encPremium);
 
     emit OptionMinted(
-      tokenId, 
-      msg.sender, 
-      isCall, 
-      strikePrice, 
-      block.timestamp + TIME_TO_EXPIRY, 
+      tokenId,
+      msg.sender,
+      block.timestamp + TIME_TO_EXPIRY,
       premiumPerContract
     );
   }
@@ -177,23 +192,18 @@ contract OptionsPool is ZamaEthereumConfig {
     require(opt.holder == address(0), "Already sold");
     require(opt.writer != msg.sender, "Writer cannot buy own option");
 
-    uint256 spotPrice = oracle.getCurrentPrice();
-
-    // Recalculate premium at current price for the buyer (fair pricing)
-    uint256 premiumPerContract = opt.isCall
-      ? PricingEngine.blackScholesCall(spotPrice, opt.strikePrice)
-      : PricingEngine.blackScholesPut(spotPrice, opt.strikePrice);
-
-    // Transfer premium (8 dec converted to 6 dec): premium * size / spot
-    uint64 totalPremium = uint64((premiumPerContract /* opt.size as plain */ * 1_000_000) / spotPrice);
-    // Note: In production, size would be decrypted; for MVP we use unit size = 1e6
+    // Use premium cached at mint time (strike is now encrypted; BSM cannot recalculate)
+    uint64 totalPremium = _premiumCache[tokenId];
+    require(totalPremium > 0, "Premium not set");
 
     // Deduct premium from buyer and credit writer
     collateral.transferCollateral(msg.sender, opt.writer, totalPremium);
 
-    // Grant buyer ACL access to the option's encrypted fields
+    // Grant buyer ACL access to all encrypted fields
     FHE.allow(opt.size, msg.sender);
     FHE.allow(opt.premium, msg.sender);
+    FHE.allow(opt.strikePrice, msg.sender);
+    FHE.allow(opt.isCall, msg.sender);
 
     // Register buyer as holder
     positionManager.setOptionHolder(tokenId, msg.sender);
@@ -215,17 +225,29 @@ contract OptionsPool is ZamaEthereumConfig {
 
     uint256 currentPrice = oracle.getCurrentPrice();
 
-    // Verify the option is in-the-money before decrypting (saves gas if OTM)
-    require(
-      PricingEngine.getOptionValue(currentPrice, opt.strikePrice, opt.isCall) > 0, 
-      "Option out of the money"
-    );
+    // FHE ITM proof: prove option is in-the-money without revealing strike on-chain
+    // call: currentPrice > strikePrice, put: currentPrice < strikePrice
+    euint64 encCurrent = FHE.asEuint64(uint64(currentPrice));
+    ebool callITM = FHE.gt(encCurrent, opt.strikePrice);
+    ebool putITM  = FHE.lt(encCurrent, opt.strikePrice);
+    ebool encITM  = FHE.select(opt.isCall, callITM, putITM);
 
-    bytes32 sizeH = euint64.unwrap(opt.size);
+    FHE.allowThis(encITM);
+    FHE.makePubliclyDecryptable(encITM);
     FHE.makePubliclyDecryptable(opt.size);
+    FHE.makePubliclyDecryptable(opt.strikePrice);
+    FHE.makePubliclyDecryptable(opt.isCall);
 
     uint256 requestId = _nextRequestId++;
-    pendingExercises[requestId] = ExerciseRequest({buyer: msg.sender, tokenId: tokenId, currentPrice: currentPrice, sizeHandle: sizeH});
+    pendingExercises[requestId] = ExerciseRequest({
+      buyer: msg.sender,
+      tokenId: tokenId,
+      currentPrice: currentPrice,
+      itmHandle: ebool.unwrap(encITM),
+      sizeHandle: euint64.unwrap(opt.size),
+      strikeHandle: euint64.unwrap(opt.strikePrice),
+      isCallHandle: ebool.unwrap(opt.isCall)
+    });
 
     emit ExerciseRequested(tokenId, msg.sender, requestId);
     return requestId;
@@ -240,22 +262,31 @@ contract OptionsPool is ZamaEthereumConfig {
     ExerciseRequest memory req = pendingExercises[requestId];
     require(req.buyer != address(0), "Unknown request");
 
-    bytes32[] memory handles = new bytes32[](1);
-    handles[0] = req.sizeHandle;
+    bytes32[] memory handles = new bytes32[](4);
+    handles[0] = req.itmHandle;
+    handles[1] = req.sizeHandle;
+    handles[2] = req.strikeHandle;
+    handles[3] = req.isCallHandle;
 
     FHE.checkSignatures(handles, abiEncodedCleartexts, decryptionProof);
-    uint64 decryptedSize = abi.decode(abiEncodedCleartexts, (uint64));
+    (bool itm, uint64 decryptedSize, uint64 decryptedStrike, bool decryptedIsCall) =
+      abi.decode(abiEncodedCleartexts, (bool, uint64, uint64, bool));
 
     delete pendingExercises[requestId];
+
+    require(itm, "Option out of the money");
 
     PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(req.tokenId);
 
     // Settlement in USDC (6 dec): (priceDelta / currentPrice) × size
-    uint256 priceDelta = PricingEngine.getOptionValue(req.currentPrice, opt.strikePrice, opt.isCall);
+    uint256 priceDelta = PricingEngine.getOptionValue(
+      req.currentPrice, 
+      uint256(decryptedStrike), 
+      decryptedIsCall
+    );
     uint64 settlement = uint64((priceDelta * uint256(decryptedSize)) / req.currentPrice);
 
     if (settlement > 0) {
-      // Transfer settlement from writer's collateral to buyer
       collateral.transferCollateral(opt.writer, req.buyer, settlement);
     }
 
@@ -268,13 +299,13 @@ contract OptionsPool is ZamaEthereumConfig {
   function expireOption(uint256 tokenId) external {
     PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(tokenId);
     require(block.timestamp >= opt.expiryTime, "Not yet expired");
+    
     // Return the writer's locked collateral now that the option has expired worthless.
-    uint64 locked = _writerLockedCollateral[tokenId];
-    delete _writerLockedCollateral[tokenId];
-    if (locked > 0) {
-      collateral.increaseCollateral(opt.writer, locked);
-    }
+    euint64 locked = _writerLockedCollateral[tokenId];
+    FHE.allow(locked, address(collateral));
+    collateral.increaseCollateralEnc(opt.writer, locked);
     positionManager.removeOptionPosition(tokenId);
+    
     emit OptionExpired(tokenId);
   }
 
