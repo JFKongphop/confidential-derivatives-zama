@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {FHE, euint64} from "@fhevm/solidity/lib/FHE.sol";
-import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
+import {FHE, euint64, ebool} from "@fhevm/solidity/lib/FHE.sol";
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
 /// @title PositionManager - Encrypted position state for Futures and Options
 /// @notice Manages creation, retrieval, update, and deletion of positions.
 ///         Position sizes and collateral are stored encrypted; prices and
 ///         direction flags remain public (required for P&L calculations).
-contract PositionManager is SepoliaConfig {
+contract PositionManager is ZamaEthereumConfig {
   // ── Futures Position ─────────────────────────────────────────────────────
 
   struct FuturesPosition {
-    euint64 size; // Encrypted position size (in USDC with 6 decimals)
+    euint64 size;           // Encrypted position size (in USDC with 6 decimals)
     euint64 collateralUsed; // Encrypted collateral locked for this position
-    uint256 entryPrice; // Public entry price (8 decimals, Chainlink format)
-    uint256 openedAt; // Timestamp of position open
-    bool isLong; // Direction: true=long, false=short
-    bool isOpen; // Existence flag
+    ebool   isLong;         // Encrypted direction: true=long, false=short
+    uint256 entryPrice;     // Public entry price (8 decimals, Chainlink format)
+    uint256 openedAt;       // Timestamp of position open
+    bool    isOpen;         // Existence flag
   }
 
   // user → positionId → position
@@ -54,9 +54,21 @@ contract PositionManager is SepoliaConfig {
 
   // ── Events ───────────────────────────────────────────────────────────────
 
-  event FuturesPositionAdded(address indexed user, uint256 positionId, uint256 entryPrice, bool isLong);
-  event FuturesPositionClosed(address indexed user, uint256 positionId);
-  event OptionPositionAdded(uint256 indexed tokenId, address writer, bool isCall, uint256 strikePrice);
+  event FuturesPositionAdded(
+    address indexed user, 
+    uint256 positionId, 
+    uint256 entryPrice
+  );
+  event FuturesPositionClosed(
+    address indexed user, 
+    uint256 positionId
+  );
+  event OptionPositionAdded(
+    uint256 indexed tokenId, 
+    address writer, 
+    bool isCall, 
+    uint256 strikePrice
+  );
   event OptionPositionClosed(uint256 indexed tokenId);
 
   // ── Constructor ──────────────────────────────────────────────────────────
@@ -76,8 +88,8 @@ contract PositionManager is SepoliaConfig {
     address user,
     euint64 size,
     euint64 collateralUsed,
-    uint256 entryPrice,
-    bool isLong
+    ebool   isLong,
+    uint256 entryPrice
   )
     external
     onlyAuthorised
@@ -87,14 +99,14 @@ contract PositionManager is SepoliaConfig {
     futuresPositions[user][positionId] = FuturesPosition({
       size: size,
       collateralUsed: collateralUsed,
+      isLong: isLong,
       entryPrice: entryPrice,
       openedAt: block.timestamp,
-      isLong: isLong,
       isOpen: true
     });
     futuresPositionCount[user]++;
 
-    emit FuturesPositionAdded(user, positionId, entryPrice, isLong);
+    emit FuturesPositionAdded(user, positionId, entryPrice);
   }
 
   function getFuturesPosition(address user, uint256 positionId) external view returns (FuturesPosition memory) {

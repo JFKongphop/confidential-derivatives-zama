@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FHE, euint64} from "@fhevm/solidity/lib/FHE.sol";
-import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {Collateral} from "./Collateral.sol";
 import {OracleIntegration} from "./OracleIntegration.sol";
 import {PositionManager} from "./PositionManager.sol";
@@ -20,7 +20,7 @@ import {PricingEngine} from "./PricingEngine.sol";
 ///   • Prices   : 8 dec  (Chainlink)
 ///   • Premiums : 8 dec  (same as price domain)
 ///   • Sizes    : 6 dec  (USDC)
-contract OptionsPool is SepoliaConfig {
+contract OptionsPool is ZamaEthereumConfig {
   using PricingEngine for *;
 
   // ── Constants ─────────────────────────────────────────────────────────────
@@ -38,12 +38,21 @@ contract OptionsPool is SepoliaConfig {
   OracleIntegration public immutable oracle;
   PositionManager public immutable positionManager;
 
-  // ── Pending exercise requests ─────────────────────────────────────────────
+  // ── Request counter ──────────────────────────────────────────────────────
+
+  uint256 private _nextRequestId = 1;
+
+  /// @dev Tracks collateral locked by each writer per option token.
+  ///      Used to return the writer's margin when an option expires worthless.
+  mapping(uint256 => uint64) private _writerLockedCollateral;
+
+  // ── Pending exercise requests ──────────────────────────────────────────────
 
   struct ExerciseRequest {
     address buyer;
     uint256 tokenId;
     uint256 currentPrice;
+    bytes32 sizeHandle;
   }
 
   mapping(uint256 => ExerciseRequest) public pendingExercises;
@@ -112,6 +121,7 @@ contract OptionsPool is SepoliaConfig {
     tokenId = positionManager.addOptionPosition(
       msg.sender, encSize, encPremium, strikePrice, block.timestamp + TIME_TO_EXPIRY, isCall
     );
+    _writerLockedCollateral[tokenId] = requiredCollateral;
 
     FHE.allowThis(encSize);
     FHE.allowThis(encPremium);
@@ -161,7 +171,7 @@ contract OptionsPool is SepoliaConfig {
   ///         to compute the settlement amount.
   /// @param  tokenId The option token to exercise
   /// @return requestId The decryption request identifier
-  function exerciseOption(uint256 tokenId) external returns (uint256 requestId) {
+  function exerciseOption(uint256 tokenId) external returns (uint256) {
     PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(tokenId);
 
     require(opt.holder == msg.sender, "Not option holder");
@@ -172,21 +182,27 @@ contract OptionsPool is SepoliaConfig {
     // Verify the option is in-the-money before decrypting (saves gas if OTM)
     require(PricingEngine.getOptionValue(currentPrice, opt.strikePrice, opt.isCall) > 0, "Option out of the money");
 
-    bytes32[] memory handles = new bytes32[](1);
-    handles[0] = euint64.unwrap(opt.size);
+    bytes32 sizeH = euint64.unwrap(opt.size);
+    FHE.makePubliclyDecryptable(opt.size);
 
-    requestId = FHE.requestDecryption(handles, this.fulfillExercise.selector);
-    pendingExercises[requestId] = ExerciseRequest({buyer: msg.sender, tokenId: tokenId, currentPrice: currentPrice});
+    uint256 requestId = _nextRequestId++;
+    pendingExercises[requestId] = ExerciseRequest({buyer: msg.sender, tokenId: tokenId, currentPrice: currentPrice, sizeHandle: sizeH});
 
     emit ExerciseRequested(tokenId, msg.sender, requestId);
+    return requestId;
   }
 
   /// @notice Callback: computes settlement and pays buyer.
-  function fulfillExercise(uint256 requestId, bytes calldata cleartexts, bytes calldata decryptionProof) external {
-    FHE.checkSignatures(requestId, cleartexts, decryptionProof);
-    uint64 decryptedSize = abi.decode(cleartexts, (uint64));
-
+  function fulfillExercise(uint256 requestId, bytes calldata abiEncodedCleartexts, bytes calldata decryptionProof) external {
     ExerciseRequest memory req = pendingExercises[requestId];
+    require(req.buyer != address(0), "Unknown request");
+
+    bytes32[] memory handles = new bytes32[](1);
+    handles[0] = req.sizeHandle;
+
+    FHE.checkSignatures(handles, abiEncodedCleartexts, decryptionProof);
+    uint64 decryptedSize = abi.decode(abiEncodedCleartexts, (uint64));
+
     delete pendingExercises[requestId];
 
     PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(req.tokenId);
@@ -209,6 +225,12 @@ contract OptionsPool is SepoliaConfig {
   function expireOption(uint256 tokenId) external {
     PositionManager.OptionPosition memory opt = positionManager.getOptionPosition(tokenId);
     require(block.timestamp >= opt.expiryTime, "Not yet expired");
+    // Return the writer's locked collateral now that the option has expired worthless.
+    uint64 locked = _writerLockedCollateral[tokenId];
+    delete _writerLockedCollateral[tokenId];
+    if (locked > 0) {
+      collateral.increaseCollateral(opt.writer, locked);
+    }
     positionManager.removeOptionPosition(tokenId);
     emit OptionExpired(tokenId);
   }
