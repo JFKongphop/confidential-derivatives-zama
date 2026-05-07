@@ -88,7 +88,12 @@ async function doFulfillExercise(
   caller: HardhatEthersSigner,
 ): Promise<void> {
   const pending = await options.pendingExercises(requestId);
-  const result = await fhevm.publicDecrypt([pending.sizeHandle]);
+  const result = await fhevm.publicDecrypt([
+    pending.itmHandle,
+    pending.sizeHandle,
+    pending.strikeHandle,
+    pending.isCallHandle,
+  ]);
   await options.connect(caller).fulfillExercise(requestId, result.abiEncodedClearValues, result.decryptionProof);
 }
 
@@ -126,8 +131,6 @@ describe("OptionsPool", function () {
         .withArgs(
           1n,                          // first tokenId
           signers.writer.address,
-          true,                        // isCall
-          STRIKE_2000,
           (v: bigint) => v > 0n,       // expiryTime > 0
           (v: bigint) => v > 0n,       // premium > 0
         );
@@ -138,7 +141,7 @@ describe("OptionsPool", function () {
         c.options.connect(signers.writer).mintOption(false, STRIKE_2000, OPTION_SIZE),
       )
         .to.emit(c.options, "OptionMinted")
-        .withArgs(1n, signers.writer.address, false, STRIKE_2000, (v: bigint) => v > 0n, (v: bigint) => v > 0n);
+        .withArgs(1n, signers.writer.address, (v: bigint) => v > 0n, (v: bigint) => v > 0n);
     });
 
     it("rejects invalid strike price", async function () {
@@ -331,17 +334,43 @@ describe("OptionsPool", function () {
       ).to.emit(c.options, "ExerciseRequested");
     });
 
-    it("cannot exercise OTM call (price below strike)", async function () {
-      await c.feed.setPrice(PRICE_1500);
+    it("cannot exercise OTM call — fulfillExercise reverts", async function () {
+      await c.feed.setPrice(PRICE_1500); // below strike $2000 → call OTM
+      const exTx = await c.options.connect(signers.buyer).exerciseOption(callTokenId);
+      const exReceipt = await exTx.wait();
+      const exEvent = exReceipt!.logs
+        .map((l) => c.options.interface.parseLog(l))
+        .find((e) => e?.name === "ExerciseRequested");
+      const requestId = exEvent!.args.requestId as bigint;
+      const pending = await c.options.pendingExercises(requestId);
+      const result = await fhevm.publicDecrypt([
+        pending.itmHandle,
+        pending.sizeHandle,
+        pending.strikeHandle,
+        pending.isCallHandle,
+      ]);
       await expect(
-        c.options.connect(signers.buyer).exerciseOption(callTokenId),
+        c.options.connect(signers.buyer).fulfillExercise(requestId, result.abiEncodedClearValues, result.decryptionProof),
       ).to.be.revertedWith("Option out of the money");
     });
 
-    it("cannot exercise OTM put (price above strike)", async function () {
-      await c.feed.setPrice(PRICE_2500);
+    it("cannot exercise OTM put — fulfillExercise reverts", async function () {
+      await c.feed.setPrice(PRICE_2500); // above strike $2000 → put OTM
+      const exTx = await c.options.connect(signers.buyer).exerciseOption(putTokenId);
+      const exReceipt = await exTx.wait();
+      const exEvent = exReceipt!.logs
+        .map((l) => c.options.interface.parseLog(l))
+        .find((e) => e?.name === "ExerciseRequested");
+      const requestId = exEvent!.args.requestId as bigint;
+      const pending = await c.options.pendingExercises(requestId);
+      const result = await fhevm.publicDecrypt([
+        pending.itmHandle,
+        pending.sizeHandle,
+        pending.strikeHandle,
+        pending.isCallHandle,
+      ]);
       await expect(
-        c.options.connect(signers.buyer).exerciseOption(putTokenId),
+        c.options.connect(signers.buyer).fulfillExercise(requestId, result.abiEncodedClearValues, result.decryptionProof),
       ).to.be.revertedWith("Option out of the money");
     });
 
