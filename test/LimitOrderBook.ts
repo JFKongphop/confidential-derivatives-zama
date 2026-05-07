@@ -34,39 +34,43 @@ import {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const INITIAL_PRICE  = 200_000_000_000n; // $2 000 (8 dec)
-const PRICE_ABOVE    = 220_000_000_000n; // $2 200 — above initial
-const PRICE_BELOW    = 180_000_000_000n; // $1 800 — below initial
-const DECIMALS_6     = 1_000_000n;
-const USER_MINT      = 10_000n * DECIMALS_6;
+const INITIAL_PRICE = 200_000_000_000n; // $2 000 (8 dec)
+const PRICE_ABOVE = 220_000_000_000n; // $2 200 — above initial
+const PRICE_BELOW = 180_000_000_000n; // $1 800 — below initial
+const DECIMALS_6 = 1_000_000n;
+const USER_MINT = 10_000n * DECIMALS_6;
 const COLLATERAL_AMT = 1_000n * DECIMALS_6;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type Signers = {
   deployer: HardhatEthersSigner;
-  alice:    HardhatEthersSigner;
-  bob:      HardhatEthersSigner;
-  keeper:   HardhatEthersSigner;
+  alice: HardhatEthersSigner;
+  bob: HardhatEthersSigner;
+  keeper: HardhatEthersSigner;
 };
 
 interface Contracts {
-  token:           MockConfidentialToken;
-  feed:            MockPriceFeed;
-  oracle:          OracleIntegration;
-  collateral:      Collateral;
+  token: MockConfidentialToken;
+  feed: MockPriceFeed;
+  oracle: OracleIntegration;
+  collateral: Collateral;
   positionManager: PositionManager;
-  futures:         PerpetualFutures;
-  lob:             LimitOrderBook;
+  futures: PerpetualFutures;
+  lob: LimitOrderBook;
 }
 
 // ── Deployment ───────────────────────────────────────────────────────────────
 
 async function deployAll(deployer: HardhatEthersSigner): Promise<Contracts> {
   const token = await new MockConfidentialToken__factory(deployer).deploy();
-  const feed  = await new MockPriceFeed__factory(deployer).deploy(INITIAL_PRICE);
-  const oracle = await new OracleIntegration__factory(deployer).deploy(await feed.getAddress());
-  const collateral = await new Collateral__factory(deployer).deploy(await token.getAddress());
+  const feed = await new MockPriceFeed__factory(deployer).deploy(INITIAL_PRICE);
+  const oracle = await new OracleIntegration__factory(deployer).deploy(
+    await feed.getAddress(),
+  );
+  const collateral = await new Collateral__factory(deployer).deploy(
+    await token.getAddress(),
+  );
   const positionManager = await new PositionManager__factory(deployer).deploy();
   const futures = await new PerpetualFutures__factory(deployer).deploy(
     await collateral.getAddress(),
@@ -98,7 +102,7 @@ async function mintAndDeposit(
   amount: bigint,
 ) {
   const collateralAddr = await collateral.getAddress();
-  const tokenAddr      = await token.getAddress();
+  const tokenAddr = await token.getAddress();
   const until = BigInt(Math.floor(Date.now() / 1000) + 86400 * 365);
   await token.mint(user.address, amount);
   await token.connect(user).setOperator(collateralAddr, until);
@@ -126,9 +130,9 @@ async function placeLimitOrder(
   input.add64(limitPrice);
   input.addBool(isLong);
   const { handles, inputProof } = await input.encrypt();
-  return lob.connect(user).placeLimitOrder(
-    handles[0], handles[1], handles[2], inputProof, leverage,
-  );
+  return lob
+    .connect(user)
+    .placeLimitOrder(handles[0], handles[1], handles[2], inputProof, leverage);
 }
 
 async function doFulfillOrder(
@@ -137,13 +141,19 @@ async function doFulfillOrder(
   caller: HardhatEthersSigner,
 ) {
   const pending = await lob.pendingFills(requestId);
-  const result  = await fhevm.publicDecrypt([
+  const result = await fhevm.publicDecrypt([
     pending.triggeredHandle,
     pending.collateralHandle,
     pending.limitPriceHandle,
     pending.isLongHandle,
   ]);
-  return lob.connect(caller).fulfillOrder(requestId, result.abiEncodedClearValues, result.decryptionProof);
+  return lob
+    .connect(caller)
+    .fulfillOrder(
+      requestId,
+      result.abiEncodedClearValues,
+      result.decryptionProof,
+    );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -156,9 +166,9 @@ describe("LimitOrderBook", function () {
     const all = await ethers.getSigners();
     signers = {
       deployer: all[0],
-      alice:    all[1],
-      bob:      all[2],
-      keeper:   all[3],
+      alice: all[1],
+      bob: all[2],
+      keeper: all[3],
     };
   });
 
@@ -166,7 +176,7 @@ describe("LimitOrderBook", function () {
     if (!fhevm.isMock) this.skip();
     c = await deployAll(signers.deployer);
     await mintAndDeposit(c.token, c.collateral, signers.alice, USER_MINT);
-    await mintAndDeposit(c.token, c.collateral, signers.bob,   USER_MINT);
+    await mintAndDeposit(c.token, c.collateral, signers.bob, USER_MINT);
   });
 
   // ── Place order ────────────────────────────────────────────────────────────
@@ -174,14 +184,28 @@ describe("LimitOrderBook", function () {
   describe("placeLimitOrder", function () {
     it("emits LimitOrderPlaced and assigns orderId starting from 1", async function () {
       await expect(
-        placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n),
+        placeLimitOrder(
+          c.lob,
+          signers.alice,
+          COLLATERAL_AMT,
+          PRICE_ABOVE,
+          true,
+          2n,
+        ),
       )
         .to.emit(c.lob, "LimitOrderPlaced")
         .withArgs(signers.alice.address, 1n, 2n);
     });
 
     it("stores the order as open", async function () {
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       const order = await c.lob.limitOrders(1n);
       expect(order.user).to.equal(signers.alice.address);
       expect(order.isOpen).to.be.true;
@@ -195,7 +219,14 @@ describe("LimitOrderBook", function () {
         await c.collateral.getAddress(),
         signers.alice,
       );
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       const balAfter = await fhevm.userDecryptEuint(
         FhevmType.euint64,
         await c.collateral.connect(signers.alice).getMyCollateral(),
@@ -207,13 +238,27 @@ describe("LimitOrderBook", function () {
 
     it("reverts for leverage 0", async function () {
       await expect(
-        placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 0n),
+        placeLimitOrder(
+          c.lob,
+          signers.alice,
+          COLLATERAL_AMT,
+          PRICE_ABOVE,
+          true,
+          0n,
+        ),
       ).to.be.revertedWith("Invalid leverage");
     });
 
     it("reverts for leverage > 10", async function () {
       await expect(
-        placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 11n),
+        placeLimitOrder(
+          c.lob,
+          signers.alice,
+          COLLATERAL_AMT,
+          PRICE_ABOVE,
+          true,
+          11n,
+        ),
       ).to.be.revertedWith("Invalid leverage");
     });
   });
@@ -222,7 +267,14 @@ describe("LimitOrderBook", function () {
 
   describe("cancelOrder", function () {
     it("emits LimitOrderCancelled and marks order closed", async function () {
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       await expect(c.lob.connect(signers.alice).cancelOrder(1n))
         .to.emit(c.lob, "LimitOrderCancelled")
         .withArgs(signers.alice.address, 1n);
@@ -231,7 +283,14 @@ describe("LimitOrderBook", function () {
     });
 
     it("returns collateral to the user", async function () {
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       const balBefore = await fhevm.userDecryptEuint(
         FhevmType.euint64,
         await c.collateral.connect(signers.alice).getMyCollateral(),
@@ -249,14 +308,32 @@ describe("LimitOrderBook", function () {
     });
 
     it("reverts when non-owner tries to cancel", async function () {
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
-      await expect(c.lob.connect(signers.bob).cancelOrder(1n)).to.be.revertedWith("Not your order");
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
+      await expect(
+        c.lob.connect(signers.bob).cancelOrder(1n),
+      ).to.be.revertedWith("Not your order");
     });
 
     it("reverts when cancelling an already-closed order", async function () {
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       await c.lob.connect(signers.alice).cancelOrder(1n);
-      await expect(c.lob.connect(signers.alice).cancelOrder(1n)).to.be.revertedWith("Order not open");
+      await expect(
+        c.lob.connect(signers.alice).cancelOrder(1n),
+      ).to.be.revertedWith("Order not open");
     });
   });
 
@@ -265,7 +342,14 @@ describe("LimitOrderBook", function () {
   describe("checkOrder", function () {
     it("creates a pendingFills entry", async function () {
       // Long limit at $2 200 — current is $2 000. Condition: price ≤ $2 200 → fires immediately
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       await expect(c.lob.connect(signers.keeper).checkOrder(1n))
         .to.emit(c.lob, "FillCheckRequested")
         .withArgs(1n, 1n);
@@ -274,9 +358,18 @@ describe("LimitOrderBook", function () {
     });
 
     it("reverts when order is not open", async function () {
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       await c.lob.connect(signers.alice).cancelOrder(1n);
-      await expect(c.lob.connect(signers.keeper).checkOrder(1n)).to.be.revertedWith("Order not open");
+      await expect(
+        c.lob.connect(signers.keeper).checkOrder(1n),
+      ).to.be.revertedWith("Order not open");
     });
   });
 
@@ -286,13 +379,21 @@ describe("LimitOrderBook", function () {
     it("opens a futures position when the limit condition fires", async function () {
       // Long limit at $2 200: condition = price ≤ $2 200
       // Current price = $2 000 ≤ $2 200 → triggered = true
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       const checkTx = await c.lob.connect(signers.keeper).checkOrder(1n);
       const receipt = await checkTx.wait();
       const ev = receipt!.logs.find(
-        (l) => c.lob.interface.parseLog(l as any)?.name === "FillCheckRequested",
+        (l) =>
+          c.lob.interface.parseLog(l as any)?.name === "FillCheckRequested",
       );
-      const requestId = (c.lob.interface.parseLog(ev as any)!.args[1]) as bigint;
+      const requestId = c.lob.interface.parseLog(ev as any)!.args[1] as bigint;
 
       await expect(doFulfillOrder(c.lob, requestId, signers.keeper))
         .to.emit(c.lob, "LimitOrderFilled")
@@ -302,18 +403,24 @@ describe("LimitOrderBook", function () {
     it("does not fill when limit condition is NOT met", async function () {
       // Long limit at $1 800: condition = price ≤ $1 800
       // Current price = $2 000 > $1 800 → triggered = false
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_BELOW, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_BELOW,
+        true,
+        2n,
+      );
       const checkTx = await c.lob.connect(signers.keeper).checkOrder(1n);
       const receipt = await checkTx.wait();
       const ev = receipt!.logs.find(
-        (l) => c.lob.interface.parseLog(l as any)?.name === "FillCheckRequested",
+        (l) =>
+          c.lob.interface.parseLog(l as any)?.name === "FillCheckRequested",
       );
-      const requestId = (c.lob.interface.parseLog(ev as any)!.args[1]) as bigint;
+      const requestId = c.lob.interface.parseLog(ev as any)!.args[1] as bigint;
 
       const tx = doFulfillOrder(c.lob, requestId, signers.keeper);
-      await expect(tx)
-        .to.emit(c.lob, "LimitOrderExpired")
-        .withArgs(1n);
+      await expect(tx).to.emit(c.lob, "LimitOrderExpired").withArgs(1n);
       await expect(tx).not.to.emit(c.lob, "LimitOrderFilled");
 
       // Order should still be open
@@ -326,13 +433,21 @@ describe("LimitOrderBook", function () {
     it("opens a short position when price is at or above limit", async function () {
       // Short limit at $1 800: condition = price ≥ $1 800
       // Current price = $2 000 ≥ $1 800 → triggered = true
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_BELOW, false, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_BELOW,
+        false,
+        2n,
+      );
       const checkTx = await c.lob.connect(signers.keeper).checkOrder(1n);
       const receipt = await checkTx.wait();
       const ev = receipt!.logs.find(
-        (l) => c.lob.interface.parseLog(l as any)?.name === "FillCheckRequested",
+        (l) =>
+          c.lob.interface.parseLog(l as any)?.name === "FillCheckRequested",
       );
-      const requestId = (c.lob.interface.parseLog(ev as any)!.args[1]) as bigint;
+      const requestId = c.lob.interface.parseLog(ev as any)!.args[1] as bigint;
 
       await expect(doFulfillOrder(c.lob, requestId, signers.keeper))
         .to.emit(c.lob, "LimitOrderFilled")
@@ -349,13 +464,21 @@ describe("LimitOrderBook", function () {
     });
 
     it("second fill on same request reverts (already deleted)", async function () {
-      await placeLimitOrder(c.lob, signers.alice, COLLATERAL_AMT, PRICE_ABOVE, true, 2n);
+      await placeLimitOrder(
+        c.lob,
+        signers.alice,
+        COLLATERAL_AMT,
+        PRICE_ABOVE,
+        true,
+        2n,
+      );
       const checkTx = await c.lob.connect(signers.keeper).checkOrder(1n);
       const receipt = await checkTx.wait();
       const ev = receipt!.logs.find(
-        (l) => c.lob.interface.parseLog(l as any)?.name === "FillCheckRequested",
+        (l) =>
+          c.lob.interface.parseLog(l as any)?.name === "FillCheckRequested",
       );
-      const requestId = (c.lob.interface.parseLog(ev as any)!.args[1]) as bigint;
+      const requestId = c.lob.interface.parseLog(ev as any)!.args[1] as bigint;
       await doFulfillOrder(c.lob, requestId, signers.keeper);
       // Second call on same requestId should revert — pendingFills entry was deleted
       await expect(

@@ -11,7 +11,9 @@ type Signers = {
 };
 
 async function deployFixture() {
-  const factory = (await ethers.getContractFactory("FHECounter")) as FHECounter__factory;
+  const factory = (await ethers.getContractFactory(
+    "FHECounter",
+  )) as FHECounter__factory;
   const fheCounterContract = (await factory.deploy()) as FHECounter;
   const fheCounterContractAddress = await fheCounterContract.getAddress();
 
@@ -25,7 +27,11 @@ describe("FHECounter", function () {
 
   before(async function () {
     const ethSigners: HardhatEthersSigner[] = await ethers.getSigners();
-    signers = { deployer: ethSigners[0], alice: ethSigners[1], bob: ethSigners[2] };
+    signers = {
+      deployer: ethSigners[0],
+      alice: ethSigners[1],
+      bob: ethSigners[2],
+    };
   });
 
   beforeEach(async function () {
@@ -52,7 +58,7 @@ describe("FHECounter", function () {
       .createEncryptedInput(fheCounterContractAddress, signers.alice.address)
       .add32(clearOne)
       .encrypt();
-    
+
     const tx = await fheCounterContract
       .connect(signers.alice)
       .increment(encryptedOne.handles[0], encryptedOne.inputProof);
@@ -81,7 +87,9 @@ describe("FHECounter", function () {
       .increment(encryptedOne.handles[0], encryptedOne.inputProof);
     await tx.wait();
 
-    tx = await fheCounterContract.connect(signers.alice).decrement(encryptedOne.handles[0], encryptedOne.inputProof);
+    tx = await fheCounterContract
+      .connect(signers.alice)
+      .decrement(encryptedOne.handles[0], encryptedOne.inputProof);
     await tx.wait();
 
     const encryptedCountAfterDec = await fheCounterContract.getCount();

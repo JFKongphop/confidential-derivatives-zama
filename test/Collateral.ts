@@ -31,7 +31,9 @@ interface Contracts {
 
 async function deploy(deployer: HardhatEthersSigner): Promise<Contracts> {
   const token = await new MockConfidentialToken__factory(deployer).deploy();
-  const collateral = await new Collateral__factory(deployer).deploy(await token.getAddress());
+  const collateral = await new Collateral__factory(deployer).deploy(
+    await token.getAddress(),
+  );
   return { token, collateral };
 }
 
@@ -60,7 +62,11 @@ async function mintAndDeposit(
   await collateral.connect(user).deposit(handles[0], inputProof);
 }
 
-async function encryptWithdraw(collateral: Collateral, user: HardhatEthersSigner, amount: bigint) {
+async function encryptWithdraw(
+  collateral: Collateral,
+  user: HardhatEthersSigner,
+  amount: bigint,
+) {
   const collateralAddr = await collateral.getAddress();
   const input = fhevm.createEncryptedInput(collateralAddr, user.address);
   input.add64(amount);
@@ -114,7 +120,9 @@ describe("Collateral (ERC-7984)", function () {
     it("emits Deposit event", async function () {
       const collateralAddr = await c.collateral.getAddress();
       const tokenAddr = await c.token.getAddress();
-      await c.token.connect(signers.alice).mint(signers.alice.address, USER_MINT);
+      await c.token
+        .connect(signers.alice)
+        .mint(signers.alice.address, USER_MINT);
       const expiry = BigInt(Math.floor(Date.now() / 1000) + 86_400);
       await c.token.connect(signers.alice).setOperator(collateralAddr, expiry);
 
@@ -124,12 +132,18 @@ describe("Collateral (ERC-7984)", function () {
 
       await expect(
         c.collateral.connect(signers.alice).deposit(handles[0], inputProof),
-      ).to.emit(c.collateral, "Deposit").withArgs(signers.alice.address, anyValue);
+      )
+        .to.emit(c.collateral, "Deposit")
+        .withArgs(signers.alice.address, anyValue);
     });
 
     it("encrypted balance increases after deposit", async function () {
       await mintAndDeposit(c.token, c.collateral, signers.alice, USER_MINT);
-      const balance = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const balance = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       expect(balance).to.equal(USER_MINT);
     });
 
@@ -140,13 +154,22 @@ describe("Collateral (ERC-7984)", function () {
       await mintAndDeposit(c.token, c.collateral, signers.alice, first);
       await mintAndDeposit(c.token, c.collateral, signers.alice, second);
 
-      const balance = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const balance = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       expect(balance).to.equal(first + second);
     });
 
     it("multiple users have independent encrypted balances", async function () {
       await mintAndDeposit(c.token, c.collateral, signers.alice, USER_MINT);
-      await mintAndDeposit(c.token, c.collateral, signers.bob, 5_000n * DECIMALS_6);
+      await mintAndDeposit(
+        c.token,
+        c.collateral,
+        signers.bob,
+        5_000n * DECIMALS_6,
+      );
 
       const [balA, balB] = await Promise.all([
         getBalance(c.collateral, signers.alice, collateralAddr),
@@ -157,10 +180,15 @@ describe("Collateral (ERC-7984)", function () {
     });
 
     it("reverts when Collateral is not set as operator", async function () {
-      await c.token.connect(signers.alice).mint(signers.alice.address, USER_MINT);
+      await c.token
+        .connect(signers.alice)
+        .mint(signers.alice.address, USER_MINT);
       // No setOperator call
 
-      const input = fhevm.createEncryptedInput(collateralAddr, signers.alice.address);
+      const input = fhevm.createEncryptedInput(
+        collateralAddr,
+        signers.alice.address,
+      );
       input.add64(USER_MINT);
       const { handles, inputProof } = await input.encrypt();
 
@@ -181,33 +209,53 @@ describe("Collateral (ERC-7984)", function () {
 
     it("emits Withdraw event", async function () {
       const withdrawAmt = 1_000n * DECIMALS_6;
-      await expect(
-        encryptWithdraw(c.collateral, signers.alice, withdrawAmt),
-      ).to.emit(c.collateral, "Withdraw").withArgs(signers.alice.address, anyValue);
+      await expect(encryptWithdraw(c.collateral, signers.alice, withdrawAmt))
+        .to.emit(c.collateral, "Withdraw")
+        .withArgs(signers.alice.address, anyValue);
     });
 
     it("encrypted balance decreases after withdraw", async function () {
       const withdrawAmt = 1_000n * DECIMALS_6;
-      const before = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const before = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
 
       await encryptWithdraw(c.collateral, signers.alice, withdrawAmt);
 
-      const after = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const after = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       expect(after).to.equal(before - withdrawAmt);
     });
 
     it("withdrawing full balance leaves zero", async function () {
       await encryptWithdraw(c.collateral, signers.alice, DEPOSIT);
-      const after = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const after = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       expect(after).to.equal(0n);
     });
 
     it("withdraw more than balance clamps to available balance (FHE.select)", async function () {
       const overRequest = DEPOSIT * 2n; // 10 000 USDC — more than the 5 000 deposited
 
-      const before = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const before = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       await encryptWithdraw(c.collateral, signers.alice, overRequest);
-      const after = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const after = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
 
       // Entire balance was transferred — remainder is 0
       expect(after).to.equal(0n);
@@ -219,7 +267,11 @@ describe("Collateral (ERC-7984)", function () {
       const chunk = 1_000n * DECIMALS_6;
       await encryptWithdraw(c.collateral, signers.alice, chunk);
       await encryptWithdraw(c.collateral, signers.alice, chunk);
-      const after = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const after = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       expect(after).to.equal(DEPOSIT - chunk * 2n);
     });
   });
@@ -236,15 +288,27 @@ describe("Collateral (ERC-7984)", function () {
 
     it("increaseCollateral adds to user balance (authorised caller)", async function () {
       const bonus = 500n * DECIMALS_6;
-      await c.collateral.connect(signers.deployer).increaseCollateral(signers.alice.address, bonus);
-      const after = await getBalance(c.collateral, signers.alice, collateralAddr);
+      await c.collateral
+        .connect(signers.deployer)
+        .increaseCollateral(signers.alice.address, bonus);
+      const after = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       expect(after).to.equal(DEPOSIT + bonus);
     });
 
     it("decreaseCollateral subtracts from user balance (authorised caller)", async function () {
       const fee = 200n * DECIMALS_6;
-      await c.collateral.connect(signers.deployer).decreaseCollateral(signers.alice.address, fee);
-      const after = await getBalance(c.collateral, signers.alice, collateralAddr);
+      await c.collateral
+        .connect(signers.deployer)
+        .decreaseCollateral(signers.alice.address, fee);
+      const after = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       expect(after).to.equal(DEPOSIT - fee);
     });
 
@@ -264,13 +328,17 @@ describe("Collateral (ERC-7984)", function () {
 
     it("increaseCollateral reverts for unauthorised caller", async function () {
       await expect(
-        c.collateral.connect(signers.alice).increaseCollateral(signers.alice.address, 100n),
+        c.collateral
+          .connect(signers.alice)
+          .increaseCollateral(signers.alice.address, 100n),
       ).to.be.revertedWith("Not authorised");
     });
 
     it("decreaseCollateral reverts for unauthorised caller", async function () {
       await expect(
-        c.collateral.connect(signers.alice).decreaseCollateral(signers.alice.address, 100n),
+        c.collateral
+          .connect(signers.alice)
+          .decreaseCollateral(signers.alice.address, 100n),
       ).to.be.revertedWith("Not authorised");
     });
 
@@ -287,7 +355,9 @@ describe("Collateral (ERC-7984)", function () {
 
   describe("Authorise", function () {
     it("owner can authorise a new address", async function () {
-      await c.collateral.connect(signers.deployer).authorise(signers.carol.address);
+      await c.collateral
+        .connect(signers.deployer)
+        .authorise(signers.carol.address);
       expect(await c.collateral.authorised(signers.carol.address)).to.be.true;
     });
 
@@ -298,11 +368,15 @@ describe("Collateral (ERC-7984)", function () {
     });
 
     it("authorised contract can call protocol helpers", async function () {
-      await c.collateral.connect(signers.deployer).authorise(signers.carol.address);
+      await c.collateral
+        .connect(signers.deployer)
+        .authorise(signers.carol.address);
       await mintAndDeposit(c.token, c.collateral, signers.alice, USER_MINT);
       // carol (authorised) can now increaseCollateral
       await expect(
-        c.collateral.connect(signers.carol).increaseCollateral(signers.alice.address, 100n),
+        c.collateral
+          .connect(signers.carol)
+          .increaseCollateral(signers.alice.address, 100n),
       ).not.to.be.reverted;
     });
   });
@@ -320,7 +394,11 @@ describe("Collateral (ERC-7984)", function () {
 
     it("returns correct handle after deposit", async function () {
       await mintAndDeposit(c.token, c.collateral, signers.alice, USER_MINT);
-      const balance = await getBalance(c.collateral, signers.alice, collateralAddr);
+      const balance = await getBalance(
+        c.collateral,
+        signers.alice,
+        collateralAddr,
+      );
       expect(balance).to.equal(USER_MINT);
     });
   });
