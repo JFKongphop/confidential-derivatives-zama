@@ -1,3 +1,4 @@
+import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { ethers, fhevm } from "hardhat";
 import { expect } from "chai";
@@ -5,8 +6,8 @@ import { FhevmType } from "@fhevm/hardhat-plugin";
 import {
   Collateral,
   Collateral__factory,
-  MockERC20,
-  MockERC20__factory,
+  MockConfidentialToken,
+  MockConfidentialToken__factory,
   MockPriceFeed,
   MockPriceFeed__factory,
   OracleIntegration,
@@ -31,7 +32,7 @@ type Signers = {
 };
 
 interface Contracts {
-  token: MockERC20;
+  token: MockConfidentialToken;
   feed: MockPriceFeed;
   oracle: OracleIntegration;
   collateral: Collateral;
@@ -40,7 +41,7 @@ interface Contracts {
 }
 
 async function deployAll(deployer: HardhatEthersSigner): Promise<Contracts> {
-  const token = await new MockERC20__factory(deployer).deploy("Mock USDC", "USDC", 6);
+  const token = await new MockConfidentialToken__factory(deployer).deploy();
   const feed  = await new MockPriceFeed__factory(deployer).deploy(INITIAL_PRICE);
   const oracle = await new OracleIntegration__factory(deployer).deploy(await feed.getAddress());
   const collateral = await new Collateral__factory(deployer).deploy(await token.getAddress());
@@ -59,14 +60,63 @@ async function deployAll(deployer: HardhatEthersSigner): Promise<Contracts> {
 }
 
 async function mintAndDeposit(
-  token: MockERC20,
+  token: MockConfidentialToken,
   collateral: Collateral,
   user: HardhatEthersSigner,
   amount: bigint,
 ) {
+  const collateralAddr = await collateral.getAddress();
+  const tokenAddr = await token.getAddress();
+  const until = BigInt(Math.floor(Date.now() / 1000) + 86400 * 365);
   await token.mint(user.address, amount);
-  await token.connect(user).approve(await collateral.getAddress(), amount);
-  await collateral.connect(user).deposit(amount);
+  await token.connect(user).setOperator(collateralAddr, until);
+  const input = fhevm.createEncryptedInput(tokenAddr, collateralAddr);
+  input.add64(amount);
+  const { handles, inputProof } = await input.encrypt();
+  await collateral.connect(user).deposit(handles[0], inputProof);
+}
+
+async function encryptWithdraw(collateral: Collateral, user: HardhatEthersSigner, amount: bigint) {
+  const collateralAddr = await collateral.getAddress();
+  const input = fhevm.createEncryptedInput(collateralAddr, user.address);
+  input.add64(amount);
+  const { handles, inputProof } = await input.encrypt();
+  return collateral.connect(user).withdraw(handles[0], inputProof);
+}
+
+async function encryptOpenPosition(
+  futures: PerpetualFutures,
+  user: HardhatEthersSigner,
+  isLong: boolean,
+  collateralAmount: bigint,
+  leverage: bigint,
+) {
+  const futuresAddr = await futures.getAddress();
+  const input = fhevm.createEncryptedInput(futuresAddr, user.address);
+  input.add64(collateralAmount);
+  input.addBool(isLong);
+  const { handles, inputProof } = await input.encrypt();
+  return futures.connect(user).openPosition(handles[0], inputProof, leverage, handles[1]);
+}
+
+async function doFulfillClose(
+  futures: PerpetualFutures,
+  requestId: bigint,
+  caller: HardhatEthersSigner,
+): Promise<void> {
+  const pending = await futures.pendingCloses(requestId);
+  const result = await fhevm.publicDecrypt([pending.sizeHandle, pending.collateralHandle, pending.isLongHandle]);
+  await futures.connect(caller).fulfillClose(requestId, result.abiEncodedClearValues, result.decryptionProof);
+}
+
+async function doFulfillLiquidation(
+  futures: PerpetualFutures,
+  requestId: bigint,
+  caller: HardhatEthersSigner,
+): Promise<void> {
+  const pending = await futures.pendingLiquidations(requestId);
+  const result = await fhevm.publicDecrypt([pending.sizeHandle, pending.collateralHandle, pending.isLongHandle]);
+  await futures.connect(caller).fulfillLiquidation(requestId, result.abiEncodedClearValues, result.decryptionProof);
 }
 
 // ── Test Suite ───────────────────────────────────────────────────────────────
@@ -103,34 +153,20 @@ describe("PerpetualFutures", function () {
   describe("Collateral Management", function () {
     it("user can deposit collateral and read encrypted balance", async function () {
       const encHandle = await c.collateral.connect(signers.alice).getMyCollateral();
-      console.log(encHandle)
       const clear = await fhevm.userDecryptEuint(
         FhevmType.euint64,
         encHandle,
         collateralAddr,
-        signers.liquidator,
+        signers.alice,
       );
-      console.log(clear)
       expect(clear).to.equal(USER_MINT);
     });
 
-    it("rejects zero deposit", async function () {
-      await expect(
-        c.collateral.connect(signers.alice).deposit(0n),
-      ).to.be.revertedWith("Invalid amount");
-    });
-
-    it("user can initiate withdraw and WithdrawRequested event is emitted", async function () {
+    it("user can withdraw and Withdraw event is emitted", async function () {
       const withdrawAmt = 500n * DECIMALS_6;
       await expect(
-        c.collateral.connect(signers.alice).withdraw(withdrawAmt),
-      ).to.emit(c.collateral, "WithdrawRequested");
-    });
-
-    it("rejects zero withdraw", async function () {
-      await expect(
-        c.collateral.connect(signers.alice).withdraw(0n),
-      ).to.be.revertedWith("Invalid amount");
+        encryptWithdraw(c.collateral, signers.alice, withdrawAmt),
+      ).to.emit(c.collateral, "Withdraw");
     });
 
     it("multiple users have independent encrypted balances", async function () {
@@ -155,15 +191,15 @@ describe("PerpetualFutures", function () {
       const leverage = 2n;
 
       await expect(
-        c.futures.connect(signers.alice).openPosition(true, collateralAmt, leverage),
+        encryptOpenPosition(c.futures, signers.alice, true, collateralAmt, leverage),
       )
         .to.emit(c.futures, "PositionOpened")
-        .withArgs(signers.alice.address, 0n, true, INITIAL_PRICE, collateralAmt);
+        .withArgs(signers.alice.address, 0n, INITIAL_PRICE, anyValue);
     });
 
     it("user can open a short position", async function () {
       await expect(
-        c.futures.connect(signers.alice).openPosition(false, 1_000n * DECIMALS_6, 3n),
+        encryptOpenPosition(c.futures, signers.alice, false, 1_000n * DECIMALS_6, 3n),
       ).to.emit(c.futures, "PositionOpened");
     });
 
@@ -174,7 +210,7 @@ describe("PerpetualFutures", function () {
       const encBefore = await c.collateral.connect(signers.alice).getMyCollateral();
       const before = await fhevm.userDecryptEuint(FhevmType.euint64, encBefore, collateralAddr, signers.alice);
 
-      await c.futures.connect(signers.alice).openPosition(true, marginAmt, 2n);
+      await encryptOpenPosition(c.futures, signers.alice, true, marginAmt, 2n);
 
       const encAfter = await c.collateral.connect(signers.alice).getMyCollateral();
       const after = await fhevm.userDecryptEuint(FhevmType.euint64, encAfter, collateralAddr, signers.alice);
@@ -183,30 +219,24 @@ describe("PerpetualFutures", function () {
     });
 
     it("entry price is recorded from oracle", async function () {
-      const tx = await c.futures.connect(signers.alice).openPosition(true, 1_000n * DECIMALS_6, 1n);
-      const receipt = await tx.wait();
+      const tx = await encryptOpenPosition(c.futures, signers.alice, true, 1_000n * DECIMALS_6, 1n);
+      const receipt = await (tx as any).wait();
       const event = receipt!.logs
-        .map((l) => c.futures.interface.parseLog(l))
-        .find((e) => e?.name === "PositionOpened");
+        .map((l: any) => c.futures.interface.parseLog(l))
+        .find((e: any) => e?.name === "PositionOpened");
       expect(event!.args.entryPrice).to.equal(INITIAL_PRICE);
     });
 
     it("rejects leverage below MIN (< 1)", async function () {
       await expect(
-        c.futures.connect(signers.alice).openPosition(true, 1_000n * DECIMALS_6, 0n),
+        encryptOpenPosition(c.futures, signers.alice, true, 1_000n * DECIMALS_6, 0n),
       ).to.be.revertedWith("Invalid leverage");
     });
 
     it("rejects leverage above MAX (> 10)", async function () {
       await expect(
-        c.futures.connect(signers.alice).openPosition(true, 1_000n * DECIMALS_6, 11n),
+        encryptOpenPosition(c.futures, signers.alice, true, 1_000n * DECIMALS_6, 11n),
       ).to.be.revertedWith("Invalid leverage");
-    });
-
-    it("rejects zero collateral amount", async function () {
-      await expect(
-        c.futures.connect(signers.alice).openPosition(true, 0n, 2n),
-      ).to.be.revertedWith("Invalid collateral amount");
     });
   });
 
@@ -216,11 +246,11 @@ describe("PerpetualFutures", function () {
     let positionId: bigint;
 
     beforeEach(async function () {
-      const tx = await c.futures.connect(signers.alice).openPosition(true, 1_000n * DECIMALS_6, 2n);
-      const receipt = await tx.wait();
+      const tx = await encryptOpenPosition(c.futures, signers.alice, true, 1_000n * DECIMALS_6, 2n);
+      const receipt = await (tx as any).wait();
       const event = receipt!.logs
-        .map((l) => c.futures.interface.parseLog(l))
-        .find((e) => e?.name === "PositionOpened");
+        .map((l: any) => c.futures.interface.parseLog(l))
+        .find((e: any) => e?.name === "PositionOpened");
       positionId = event!.args.positionId;
     });
 
@@ -236,8 +266,12 @@ describe("PerpetualFutures", function () {
       const encBefore = await c.collateral.connect(signers.alice).getMyCollateral();
       const before = await fhevm.userDecryptEuint(FhevmType.euint64, encBefore, collateralAddr, signers.alice);
 
-      await c.futures.connect(signers.alice).closePosition(positionId);
-      await fhevm.awaitDecryptionOracle(); // oracle auto-calls fulfillClose
+      const closeTx = await c.futures.connect(signers.alice).closePosition(positionId);
+      const closeReceipt = await closeTx.wait();
+      const closeEvent = closeReceipt!.logs
+        .map((l) => c.futures.interface.parseLog(l))
+        .find((e) => e?.name === "PositionCloseRequested");
+      await doFulfillClose(c.futures, closeEvent!.args.requestId, signers.alice);
 
       const encAfter = await c.collateral.connect(signers.alice).getMyCollateral();
       const after = await fhevm.userDecryptEuint(FhevmType.euint64, encAfter, collateralAddr, signers.alice);
@@ -247,8 +281,12 @@ describe("PerpetualFutures", function () {
     it("close at loss (long, price down) returns less than original margin", async function () {
       await c.feed.setPrice(150_000_000_000n);
 
-      await c.futures.connect(signers.alice).closePosition(positionId);
-      await fhevm.awaitDecryptionOracle();
+      const closeTx = await c.futures.connect(signers.alice).closePosition(positionId);
+      const closeReceipt = await closeTx.wait();
+      const closeEvent = closeReceipt!.logs
+        .map((l) => c.futures.interface.parseLog(l))
+        .find((e) => e?.name === "PositionCloseRequested");
+      await doFulfillClose(c.futures, closeEvent!.args.requestId, signers.alice);
 
       const encAfter = await c.collateral.connect(signers.alice).getMyCollateral();
       const after = await fhevm.userDecryptEuint(FhevmType.euint64, encAfter, collateralAddr, signers.alice);
@@ -256,8 +294,12 @@ describe("PerpetualFutures", function () {
     });
 
     it("position is removed after closing", async function () {
-      await c.futures.connect(signers.alice).closePosition(positionId);
-      await fhevm.awaitDecryptionOracle();
+      const closeTx = await c.futures.connect(signers.alice).closePosition(positionId);
+      const closeReceipt = await closeTx.wait();
+      const closeEvent = closeReceipt!.logs
+        .map((l) => c.futures.interface.parseLog(l))
+        .find((e) => e?.name === "PositionCloseRequested");
+      await doFulfillClose(c.futures, closeEvent!.args.requestId, signers.alice);
       await expect(
         c.positionManager.getFuturesPosition(signers.alice.address, positionId),
       ).to.be.revertedWith("Position not open");
@@ -280,11 +322,11 @@ describe("PerpetualFutures", function () {
     beforeEach(async function () {
       await mintAndDeposit(c.token, c.collateral, signers.liquidator, USER_MINT);
 
-      const tx = await c.futures.connect(signers.alice).openPosition(true, MARGIN, LEVERAGE);
-      const receipt = await tx.wait();
+      const tx = await encryptOpenPosition(c.futures, signers.alice, true, MARGIN, LEVERAGE);
+      const receipt = await (tx as any).wait();
       const event = receipt!.logs
-        .map((l) => c.futures.interface.parseLog(l))
-        .find((e) => e?.name === "PositionOpened");
+        .map((l: any) => c.futures.interface.parseLog(l))
+        .find((e: any) => e?.name === "PositionOpened");
       positionId = event!.args.positionId;
     });
 
@@ -297,11 +339,17 @@ describe("PerpetualFutures", function () {
 
     it("liquidation callback emits Liquidated event", async function () {
       await c.feed.setPrice(100_000_000_000n);
+      const liqTx = await c.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, positionId);
+      const liqReceipt = await liqTx.wait();
+      const liqEvent = liqReceipt!.logs
+        .map((l) => c.futures.interface.parseLog(l))
+        .find((e) => e?.name === "LiquidationRequested");
+      const requestId = liqEvent!.args.requestId;
+      const pending = await c.futures.pendingLiquidations(requestId);
+      const result = await fhevm.publicDecrypt([pending.sizeHandle, pending.collateralHandle, pending.isLongHandle]);
       await expect(
-        c.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, positionId),
-      ).to.emit(c.futures, "LiquidationRequested");
-      // Let oracle process → should emit Liquidated
-      await fhevm.awaitDecryptionOracle();
+        c.futures.connect(signers.liquidator).fulfillLiquidation(requestId, result.abiEncodedClearValues, result.decryptionProof),
+      ).to.emit(c.futures, "Liquidated");
     });
 
     it("liquidator receives bonus after liquidation", async function () {
@@ -312,8 +360,12 @@ describe("PerpetualFutures", function () {
         FhevmType.euint64, encBefore, collateralAddr, signers.liquidator,
       );
 
-      await c.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, positionId);
-      await fhevm.awaitDecryptionOracle();
+      const liqTx = await c.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, positionId);
+      const liqReceipt = await liqTx.wait();
+      const liqEvent = liqReceipt!.logs
+        .map((l) => c.futures.interface.parseLog(l))
+        .find((e) => e?.name === "LiquidationRequested");
+      await doFulfillLiquidation(c.futures, liqEvent!.args.requestId, signers.liquidator);
 
       const encAfter = await c.collateral.connect(signers.liquidator).getMyCollateral();
       const after = await fhevm.userDecryptEuint(
@@ -324,8 +376,12 @@ describe("PerpetualFutures", function () {
 
     it("position is removed after liquidation", async function () {
       await c.feed.setPrice(100_000_000_000n);
-      await c.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, positionId);
-      await fhevm.awaitDecryptionOracle();
+      const liqTx = await c.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, positionId);
+      const liqReceipt = await liqTx.wait();
+      const liqEvent = liqReceipt!.logs
+        .map((l) => c.futures.interface.parseLog(l))
+        .find((e) => e?.name === "LiquidationRequested");
+      await doFulfillLiquidation(c.futures, liqEvent!.args.requestId, signers.liquidator);
       await expect(
         c.positionManager.getFuturesPosition(signers.alice.address, positionId),
       ).to.be.revertedWith("Position not open");
@@ -340,9 +396,14 @@ describe("PerpetualFutures", function () {
 
     it("cannot liquidate a healthy position (revert in callback)", async function () {
       // Price unchanged — the callback should revert with 'Not liquidatable'
-      // Since awaitDecryptionOracle swallows the revert, we verify position still exists
-      await c.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, positionId);
-      try { await fhevm.awaitDecryptionOracle(); } catch { /* callback reverted — expected */ }
+      const liqTx = await c.futures.connect(signers.liquidator).liquidatePosition(signers.alice.address, positionId);
+      const liqReceipt = await liqTx.wait();
+      const liqEvent = liqReceipt!.logs
+        .map((l) => c.futures.interface.parseLog(l))
+        .find((e) => e?.name === "LiquidationRequested");
+      await expect(
+        doFulfillLiquidation(c.futures, liqEvent!.args.requestId, signers.liquidator),
+      ).to.be.revertedWith("Not liquidatable");
       // Position should still be open because liquidation failed
       const pos = await c.positionManager.getFuturesPosition(signers.alice.address, positionId);
       expect(pos.isOpen).to.be.true;

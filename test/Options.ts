@@ -5,8 +5,8 @@ import { FhevmType } from "@fhevm/hardhat-plugin";
 import {
   Collateral,
   Collateral__factory,
-  MockERC20,
-  MockERC20__factory,
+  MockConfidentialToken,
+  MockConfidentialToken__factory,
   MockPriceFeed,
   MockPriceFeed__factory,
   OracleIntegration,
@@ -37,7 +37,7 @@ type Signers = {
 };
 
 interface Contracts {
-  token:           MockERC20;
+  token:           MockConfidentialToken;
   feed:            MockPriceFeed;
   oracle:          OracleIntegration;
   collateral:      Collateral;
@@ -48,7 +48,7 @@ interface Contracts {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 async function deployAll(deployer: HardhatEthersSigner): Promise<Contracts> {
-  const token           = await new MockERC20__factory(deployer).deploy("Mock USDC", "USDC", 6);
+  const token           = await new MockConfidentialToken__factory(deployer).deploy();
   const feed            = await new MockPriceFeed__factory(deployer).deploy(PRICE_2000);
   const oracle          = await new OracleIntegration__factory(deployer).deploy(await feed.getAddress());
   const collateral      = await new Collateral__factory(deployer).deploy(await token.getAddress());
@@ -66,14 +66,30 @@ async function deployAll(deployer: HardhatEthersSigner): Promise<Contracts> {
 }
 
 async function mintAndDeposit(
-  token: MockERC20,
+  token: MockConfidentialToken,
   collateral: Collateral,
   user: HardhatEthersSigner,
   amount: bigint,
 ) {
+  const collateralAddr = await collateral.getAddress();
+  const tokenAddr = await token.getAddress();
+  const until = BigInt(Math.floor(Date.now() / 1000) + 86400 * 365);
   await token.mint(user.address, amount);
-  await token.connect(user).approve(await collateral.getAddress(), amount);
-  await collateral.connect(user).deposit(amount);
+  await token.connect(user).setOperator(collateralAddr, until);
+  const input = fhevm.createEncryptedInput(tokenAddr, collateralAddr);
+  input.add64(amount);
+  const { handles, inputProof } = await input.encrypt();
+  await collateral.connect(user).deposit(handles[0], inputProof);
+}
+
+async function doFulfillExercise(
+  options: OptionsPool,
+  requestId: bigint,
+  caller: HardhatEthersSigner,
+): Promise<void> {
+  const pending = await options.pendingExercises(requestId);
+  const result = await fhevm.publicDecrypt([pending.sizeHandle]);
+  await options.connect(caller).fulfillExercise(requestId, result.abiEncodedClearValues, result.decryptionProof);
 }
 
 // ── Test Suite ───────────────────────────────────────────────────────────────
@@ -271,8 +287,12 @@ describe("OptionsPool", function () {
       const encBefore = await c.collateral.connect(signers.buyer).getMyCollateral();
       const before    = await fhevm.userDecryptEuint(FhevmType.euint64, encBefore, collateralAddr, signers.buyer);
 
-      await c.options.connect(signers.buyer).exerciseOption(callTokenId);
-      await fhevm.awaitDecryptionOracle(); // oracle auto-calls fulfillExercise
+      const exTx = await c.options.connect(signers.buyer).exerciseOption(callTokenId);
+      const exReceipt = await exTx.wait();
+      const exEvent = exReceipt!.logs
+        .map((l) => c.options.interface.parseLog(l))
+        .find((e) => e?.name === "ExerciseRequested");
+      await doFulfillExercise(c.options, exEvent!.args.requestId, signers.buyer);
 
       const encAfter = await c.collateral.connect(signers.buyer).getMyCollateral();
       const after    = await fhevm.userDecryptEuint(FhevmType.euint64, encAfter, collateralAddr, signers.buyer);
@@ -285,8 +305,12 @@ describe("OptionsPool", function () {
       const encBefore = await c.collateral.connect(signers.buyer).getMyCollateral();
       const before    = await fhevm.userDecryptEuint(FhevmType.euint64, encBefore, collateralAddr, signers.buyer);
 
-      await c.options.connect(signers.buyer).exerciseOption(putTokenId);
-      await fhevm.awaitDecryptionOracle();
+      const exTx = await c.options.connect(signers.buyer).exerciseOption(putTokenId);
+      const exReceipt = await exTx.wait();
+      const exEvent = exReceipt!.logs
+        .map((l) => c.options.interface.parseLog(l))
+        .find((e) => e?.name === "ExerciseRequested");
+      await doFulfillExercise(c.options, exEvent!.args.requestId, signers.buyer);
 
       const encAfter = await c.collateral.connect(signers.buyer).getMyCollateral();
       const after    = await fhevm.userDecryptEuint(FhevmType.euint64, encAfter, collateralAddr, signers.buyer);
@@ -333,8 +357,12 @@ describe("OptionsPool", function () {
 
     it("option is removed from PositionManager after exercise", async function () {
       await c.feed.setPrice(PRICE_2500);
-      await c.options.connect(signers.buyer).exerciseOption(callTokenId);
-      await fhevm.awaitDecryptionOracle();
+      const exTx = await c.options.connect(signers.buyer).exerciseOption(callTokenId);
+      const exReceipt = await exTx.wait();
+      const exEvent = exReceipt!.logs
+        .map((l) => c.options.interface.parseLog(l))
+        .find((e) => e?.name === "ExerciseRequested");
+      await doFulfillExercise(c.options, exEvent!.args.requestId, signers.buyer);
 
       await expect(
         c.positionManager.getOptionPosition(callTokenId),
