@@ -142,6 +142,15 @@ contract Collateral is ZamaEthereumConfig {
     FHE.allow(_collateral[user], user);
   }
 
+  /// @notice Increase `user`'s encrypted balance by an already-encrypted `amount`.
+  ///         Used by LimitOrderBook when a limit order is cancelled.
+  function increaseCollateralEnc(address user, euint64 amount) external onlyAuthorised {
+    FHE.allowThis(amount);
+    _collateral[user] = FHE.add(_collateral[user], amount);
+    FHE.allowThis(_collateral[user]);
+    FHE.allow(_collateral[user], user);
+  }
+
   /// @notice Encrypted transfer between two users. Uses FHE.select so the
   ///         deduction is clamped to balance if insufficient.
   function transferCollateral(address from, address to, uint64 amount) external onlyAuthorised {
