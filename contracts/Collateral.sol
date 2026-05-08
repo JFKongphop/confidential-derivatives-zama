@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {FHE, euint64, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
+import {FHE, euint64, ebool, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {IERC7984} from "@openzeppelin/confidential-contracts/interfaces/IERC7984.sol";
+import {IERC7984Receiver} from "@openzeppelin/confidential-contracts/interfaces/IERC7984Receiver.sol";
 
 /// @title Collateral - Encrypted collateral vault for Futures and Options
 /// @notice Users deposit ERC-7984 confidential tokens; balances are stored encrypted
@@ -16,7 +17,7 @@ import {IERC7984} from "@openzeppelin/confidential-contracts/interfaces/IERC7984
 /// Withdraw flow (no oracle):
 ///   1. User calls withdraw(amount) — FHE.select clamps to available balance.
 ///   2. Token transfer happens in the same transaction.
-contract Collateral is ZamaEthereumConfig {
+contract Collateral is ZamaEthereumConfig, IERC7984Receiver {
   // ── State ────────────────────────────────────────────────────────────────
 
   IERC7984 public immutable token;
@@ -42,27 +43,36 @@ contract Collateral is ZamaEthereumConfig {
 
   // ── External functions ───────────────────────────────────────────────────
 
-  /// @notice Deposit tokens into the encrypted vault.
-  ///         Caller must have set this contract as an operator on the token first.
-  /// @param  encAmount  Off-chain encrypted amount handle (externalEuint64).
-  /// @param  inputProof Proof that the caller knows the plaintext of encAmount.
-  function deposit(externalEuint64 encAmount, bytes calldata inputProof) external {
-    // confidentialTransferFrom gives Collateral (the `to`) permanent ACL access
-    // to `transferred`, so the FHE.add below is always valid.
-    euint64 transferred = token.confidentialTransferFrom(
-      msg.sender, 
-      address(this), 
-      encAmount, 
-      inputProof
-    );
-    _collateral[msg.sender] = FHE.add(_collateral[msg.sender], transferred);
-    
-    FHE.allowThis(_collateral[msg.sender]);
-    FHE.allow(_collateral[msg.sender], msg.sender);
-    // Allow the user to decrypt the emitted handle from the event log.
-    FHE.allow(transferred, msg.sender);
-    
-    emit Deposit(msg.sender, transferred);
+  /// @notice ERC7984 receiver callback — called by the token after a confidentialTransferAndCall.
+  ///         User calls token.confidentialTransferAndCall(collateral, handle, proof, "") directly;
+  ///         the token verifies the proof and then calls this function with the already-decoded euint64.
+  ///         No separate proof verification needed here, eliminating the contractAddress ambiguity.
+  /// @param  from    The sender of the confidential transfer (user).
+  /// @param  amount  Already-verified encrypted amount.
+  function onConfidentialTransferReceived(
+    address /* operator */,
+    address from,
+    euint64 amount,
+    bytes calldata /* data */
+  ) external override returns (ebool) {
+    require(msg.sender == address(token), "Collateral: only token");
+
+    if (FHE.isInitialized(_collateral[from])) {
+      _collateral[from] = FHE.add(_collateral[from], amount);
+    } else {
+      _collateral[from] = amount;
+    }
+
+    FHE.allowThis(_collateral[from]);
+    FHE.allow(_collateral[from], from);
+    FHE.allow(amount, from);
+
+    emit Deposit(from, amount);
+    // TOKEN needs transient ACL access to the returned ebool so it can call FHE.select(success, ...) 
+    // to decide whether to refund. Without this, TOKEN gets ACLNotAllowed on its FHE.select call.
+    ebool success = FHE.asEbool(true);
+    FHE.allowTransient(success, msg.sender); // msg.sender = TOKEN
+    return success;
   }
 
   /// @notice Withdraw up to `encAmount` tokens from the vault in a single transaction.
