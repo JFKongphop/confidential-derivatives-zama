@@ -9,7 +9,7 @@ import {ERC7984} from "@openzeppelin/confidential-contracts/token/ERC7984/ERC798
 /// @notice Provides a public mint function so tests can fund wallets without
 ///         an inputProof. All balances and transfers are encrypted via FHEVM.
 contract MockConfidentialToken is ZamaEthereumConfig, ERC7984 {
-  constructor() ERC7984("Mock Confidential USDC", "cUSDC", "") {}
+  constructor() ERC7984("Mock Confidential WETH", "cWETH", "") {}
 
   /// @notice Mint `amount` tokens to `to`. Test helper only.
   function mint(address to, uint64 amount) external {
