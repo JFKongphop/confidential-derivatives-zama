@@ -19,6 +19,9 @@ interface AggregatorV3Interface {
 /// @notice Returns prices with 8-decimal precision (Chainlink default).
 ///         All consuming contracts use this to obtain the current mark price.
 contract OracleIntegration {
+  /// @dev Chainlink ETH/USD feed on Sepolia
+  address public constant FEED_ADDRESS = 0x694AA1769357215DE4FAC081bf1f309aDC325306;
+
   AggregatorV3Interface public immutable priceFeed;
 
   /// @dev Maximum age (seconds) before a price is considered stale
@@ -26,9 +29,8 @@ contract OracleIntegration {
 
   event PriceFeedUpdated(address newFeed);
 
-  constructor(address feedAddress) {
-    require(feedAddress != address(0), "Invalid feed address");
-    priceFeed = AggregatorV3Interface(feedAddress);
+  constructor() {
+    priceFeed = AggregatorV3Interface(FEED_ADDRESS);
   }
 
   /// @notice Returns the latest ETH/USD price with 8-decimal precision.
