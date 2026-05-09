@@ -116,7 +116,199 @@ The trigger price is never revealed to keepers — only whether it was hit.
 
 ---
 
-## Quick Start
+## Architecture & Contract Flow
+
+### System Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          Frontend (Next.js)                      │
+│  useEncrypt() ─ Zama React SDK ─ wagmi/viem ─ MetaMask          │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ encrypted handles + inputProof
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Sepolia Testnet (fhEVM)                    │
+│                                                                 │
+│  ┌─────────────┐    ┌──────────────────┐    ┌───────────────┐   │
+│  │ Collateral  │◄───│ PerpetualFutures │───►│PositionManager│   │
+│  │   .sol      │    │      .sol        │    │    .sol       │   │
+│  └─────────────┘    └────────┬─────────┘    └───────────────┘   │
+│  ┌─────────────┐             │              ┌───────────────┐   │
+│  │LimitOrder   │◄────────────┤              │OptionsPool    │   │
+│  │  Book.sol   │             │              │    .sol       │   │
+│  └─────────────┘             │              └───────┬───────┘   │
+│  ┌─────────────┐    ┌────────▼─────────┐    ┌───────▼───────┐   │
+│  │OracleInteg. │◄───│  PricingEngine   │    │   Zama KMS    │   │
+│  │    .sol     │    │      .sol        │    │ (off-chain)   │   │
+│  └─────────────┘    └──────────────────┘    └───────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Flow 1 — Collateral Deposit
+
+```
+User
+ │
+ ├─1─► MockConfidentialToken.wrap(amount)
+ │          converts ETH → cWETH token
+ │
+ ├─2─► useEncrypt({ value: amount, type: 'euint64' })
+ │          Zama SDK encrypts client-side → { handle, inputProof }
+ │
+ └─3─► Collateral.deposit(handle, inputProof)
+            FHE.fromExternal verifies proof
+            _balances[user] = FHE.add(_balances[user], encAmount)
+            encrypted balance never leaves ciphertext form ✓
+```
+
+---
+
+### Flow 2 — Open Futures Position
+
+```
+User
+ │
+ ├─1─► useEncrypt([
+ │         { value: collateral, type: 'euint64' },
+ │         { value: isLong,     type: 'ebool'   }
+ │     ]) ──► { handles[0], handles[1], inputProof }
+ │
+ └─2─► PerpetualFutures.openPosition(
+            encCollateral, inputProof, leverage, encIsLong)
+            │
+            ├─► FHE.fromExternal(encCollateral, proof)  ← verify ZK proof
+            ├─► FHE.mul(encCollateral, encLeverage)     ← encSize (FHE mul)
+            ├─► Collateral.decreaseCollateralEnc(user, encCollateral)
+            ├─► PositionManager.addFuturesPosition(
+            │       encSize, encCollateral, encIsLong, entryPrice)
+            └─► emit PositionOpened(user, positionId, price, encCollateral)
+
+ Chain state: size, collateral, direction all stored as ciphertexts ✓
+```
+
+---
+
+### Flow 3 — Close Futures Position (2-step async)
+
+```
+User
+ │
+ ├─STEP 1─► PerpetualFutures.closePosition(positionId)
+ │               │
+ │               ├─► PositionManager.getFuturesPosition(user, id)
+ │               ├─► FHE.makePubliclyDecryptable(size, collateral, isLong)
+ │               │       marks 3 ciphertexts for KMS decryption
+ │               ├─► pendingCloses[requestId] = CloseRequest{...handles}
+ │               └─► emit PositionCloseRequested(user, positionId, requestId)
+ │
+ │  [KMS decryption happens off-chain — Zama network decrypts the 3 handles]
+ │
+ └─STEP 2─► Frontend calls publicDecrypt([sizeHandle, collHandle, isLongHandle])
+                 │    ← Zama KMS returns clearValues + decryptionProof
+                 │
+                 └─► PerpetualFutures.fulfillClose(
+                         requestId, abiEncodedCleartexts, decryptionProof)
+                         │
+                         ├─► FHE.checkSignatures(handles, cleartexts, proof)
+                         ├─► Compute PnL: delta × size / entryPrice
+                         ├─► if profitable:
+                         │       Collateral.increaseCollateral(user, collateral + gains)
+                         │   else:
+                         │       Collateral.increaseCollateral(user, collateral - loss)
+                         ├─► _accumulatePnl(user, gains/loss)  ← encrypted PnL history
+                         └─► PositionManager.removeFuturesPosition(user, id)
+```
+
+---
+
+### Flow 4 — Place Limit Order
+
+```
+User
+ │
+ ├─1─► useEncrypt([
+ │         { value: collateral,  type: 'euint64' },
+ │         { value: limitPrice,  type: 'euint64' },
+ │         { value: isLong,      type: 'ebool'   }
+ │     ]) ──► { handles[0..2], inputProof }
+ │                  ↑ all 3 encrypted with ONE shared proof
+ │
+ └─2─► LimitOrderBook.placeLimitOrder(
+            encCollateral, encLimitPrice, encIsLong, inputProof, leverage)
+            │
+            ├─► FHE.fromExternal(all 3, proof)
+            ├─► Collateral.decreaseCollateral(user, collateral)
+            └─► orders[orderId] = { encCollateral, encLimitPrice, encIsLong }
+                                    all 3 fields are ciphertexts on-chain ✓
+
+Keeper (later) ──► LimitOrderBook.checkOrder(orderId, currentPrice)
+                       │
+                       ├─► encCurrentPrice = FHE.asEuint64(currentPrice)
+                       ├─► longTriggered  = FHE.lte(order.limitPrice, encCurrent)
+                       ├─► shortTriggered = FHE.gte(order.limitPrice, encCurrent)
+                       ├─► triggered      = FHE.select(order.isLong, longT, shortT)
+                       └─► FHE.makePubliclyDecryptable(triggered)
+                                ↓ KMS decrypts → fulfillOrder opens position
+```
+
+---
+
+### Flow 5 — Options (Mint → Buy → Exercise)
+
+```
+Writer
+ └─► OptionsPool.mintOption(isCall: bool, strikePrice: uint256, size: uint64)
+         │  [plaintext inputs — Black-Scholes requires real arithmetic]
+         │
+         ├─► PricingEngine.blackScholesCall/Put(spotPrice, strikePrice)
+         │       on-chain BSM approximation → premium
+         │
+         ├─► Collateral.decreaseCollateral(writer, requiredCollateral)
+         │
+         ├─► encStrike  = FHE.asEuint64(strikePrice)  ← encrypted after pricing
+         │   encIsCall  = FHE.asEbool(isCall)
+         │   encSize    = FHE.asEuint64(size)
+         │
+         └─► PositionManager.addOptionsPosition(NFT tokenId, encrypted fields)
+
+Buyer  ──► OptionsPool.buyOption(tokenId)
+               Collateral.decreaseCollateral(buyer, premium)
+
+Holder ──► OptionsPool.exerciseOption(tokenId)
+               │
+               ├─► encCurrent = FHE.asEuint64(oracle.getCurrentPrice())
+               ├─► callITM = FHE.gt(encCurrent, opt.strikePrice)   ← FHE compare
+               ├─► putITM  = FHE.lt(encCurrent, opt.strikePrice)
+               ├─► encITM  = FHE.select(opt.isCall, callITM, putITM)
+               ├─► FHE.makePubliclyDecryptable(encITM, size, strike, isCall)
+               └─► emit ExerciseRequested(tokenId, requestId)
+                        ↓ KMS decrypts
+               fulfillExercise(requestId, cleartexts, proof)
+                   require(itm == true)
+                   payout = size × |current - strike| / current
+                   Collateral.increaseCollateral(holder, payout)
+```
+
+---
+
+### Key Design Principle — ACL Permissions
+
+Every ciphertext created must be explicitly granted to each address that needs to read it:
+
+```solidity
+FHE.allowThis(encValue);                    // contract can operate on it
+FHE.allow(encValue, address(positionMgr));  // PositionManager can store it
+FHE.allow(encValue, msg.sender);            // user can decrypt it via KMS
+```
+
+Without `FHE.allow`, even the user cannot decrypt their own position fields.
+
+---
+
+
 
 ## Quick Start
 
