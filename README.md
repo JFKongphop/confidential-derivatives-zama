@@ -57,6 +57,21 @@ Visible limit orders reveal your intended entry price, enabling spoofers to plac
 
 ---
 
+## Live Transactions (Sepolia)
+
+End-to-end user flow verified on Sepolia testnet:
+
+| Action | Function | Tx |
+|---|---|---|
+| Mint test cWETH (faucet) | `mint` | [0x66bc78a2...](https://sepolia.etherscan.io/tx/0x66bc78a22652b11a97f42ac3851d53f483f98ce6d460b4bc5cbff7ef4b0d2fd8) |
+| Deposit cWETH → Collateral vault | `confidentialTransferAndCall` | [0xef05fb9f...](https://sepolia.etherscan.io/tx/0xef05fb9fa9bb62423cdbff6b6ee9930cc53a8ddcb3ba3d4cb664aedd41c7eace) |
+| Open futures position (encrypted collateral + direction) | `openPosition` | [0x7843d61d...](https://sepolia.etherscan.io/tx/0x7843d61d6e3bcbec4d15451eb0afd7f44a9a896137b686462d4699219077126b) |
+| Close futures position (async KMS decrypt) | `closePosition` | [0x20c29d65...](https://sepolia.etherscan.io/tx/0x20c29d65150b5e15c3b209831bf72a5a3a48424096ae7a8085c1786cf2910030) |
+| Place limit order (encrypted price + direction) | `placeLimitOrder` | [0x993e687b...](https://sepolia.etherscan.io/tx/0x993e687b00c9a0b6c842d2b2c04f7c3ee27d183401963d7fc84c30d38cbabf6d) |
+| Mint option (BSM pricing → encrypt strike) | `mintOption` | [0xced93941...](https://sepolia.etherscan.io/tx/0xced93941021a79fad47608a82eb01bc96634c37ae9f8ba16732ad9f1f077949d) |
+
+---
+
 ## Encrypted Fields at a Glance
 
 | Field | Contract | Type | Privacy Benefit |
@@ -74,6 +89,54 @@ Visible limit orders reveal your intended entry price, enabling spoofers to plac
 | Strike price | `PositionManager` | `euint64` | Prevents MEV reading strike and placing adversarial orders |
 | Option direction (`isCall`) | `PositionManager` | `ebool` | Hides directional view — call/put leaks bull/bear bias |
 | Writer locked margin | `OptionsPool` | `euint64` | Hides writer's risk exposure per option |
+
+---
+
+## Options Pricing — Black-Scholes Approximation
+
+Options premiums are computed on-chain using a simplified Black-Scholes model (`PricingEngine.sol`) with fixed parameters suitable for an MVP:
+
+| Parameter | Value |
+|---|---|
+| Implied Volatility (IV) | 20% |
+| Risk-Free Rate (RFR) | 5% |
+| Time to Expiry (T) | 7 days |
+
+**Call premium formula:**
+- Extrinsic value = 4% of spot price (≈ 400 bps, derived from IV/T approximation)
+- If ITM/ATM: `premium = (spot − strike) + extrinsic`
+- If OTM: `premium = max(extrinsic − (strike − spot), 0)`
+
+**Put premium formula:**
+- Same extrinsic base (4% of spot)
+- If ITM/ATM: `premium = (strike − spot) + extrinsic`
+- If OTM: `premium = max(extrinsic − (spot − strike), 0)`
+
+**Why plaintext for pricing, ciphertext for privacy:**
+
+Black-Scholes requires real arithmetic (division, square roots) which is not feasible inside FHE today. So the premium is computed in plaintext from the public oracle price and the user-supplied strike. Once the premium is accepted, the strike is immediately encrypted:
+
+```solidity
+// OptionsPool.sol — after premium is computed in plaintext
+uint256 premium = isCall
+    ? PricingEngine.blackScholesCall(spotPrice, strikePrice)
+    : PricingEngine.blackScholesPut(spotPrice, strikePrice);
+
+// Strike encrypted immediately — never stored in plaintext on-chain
+euint64 encStrike = FHE.asEuint64(uint64(strikePrice));
+FHE.allow(encStrike, address(this));
+FHE.allow(encStrike, msg.sender);
+```
+
+Settlement at exercise uses pure FHE comparison — no plaintext strike is ever read:
+
+```solidity
+euint64 encCurrent = FHE.asEuint64(uint64(currentPrice));
+ebool callITM = FHE.gt(encCurrent, opt.strikePrice);
+ebool putITM  = FHE.lt(encCurrent, opt.strikePrice);
+ebool encITM  = FHE.select(opt.isCall, callITM, putITM);
+FHE.makePubliclyDecryptable(encITM);
+```
 
 ---
 
@@ -103,17 +166,70 @@ FHE.makePubliclyDecryptable(encITM);
 
 The oracle network decrypts `encITM` and returns a proof. `fulfillExercise` enforces `require(itm)` on-chain. The strike is revealed only at settlement — not before.
 
-### Stop-Loss / Take-Profit: Private Price Triggers
+### Stop-Loss / Take-Profit: Direction-Aware Private Triggers
+
+SL/TP logic is direction-aware — whether a price level means "stop" depends on whether you're long or short. This is resolved entirely in FHE using `FHE.select`:
 
 ```solidity
-// checkTrigger() — trigger check over encrypted SL/TP
-ebool slHit = FHE.lt(encCurrent, pos.stopLoss);
-ebool tpHit = FHE.gt(encCurrent, pos.takeProfit);
-ebool triggered = FHE.or(slHit, tpHit);
+// checkTrigger() — direction-aware SL/TP check, all in FHE
+euint64 encCurrentPrice = FHE.asEuint64(uint64(currentPrice));
+
+// Stop-loss: long fires if price FALLS below SL; short fires if price RISES above SL
+ebool slLong  = FHE.lt(encCurrentPrice, trig.stopLoss);
+ebool slShort = FHE.gt(encCurrentPrice, trig.stopLoss);
+ebool slFired = FHE.select(pos.isLong, slLong, slShort); // ← direction is also encrypted
+
+// Take-profit: long fires if price RISES above TP; short fires if price FALLS below TP
+ebool tpLong  = FHE.gt(encCurrentPrice, trig.takeProfit);
+ebool tpShort = FHE.lt(encCurrentPrice, trig.takeProfit);
+ebool tpFired = FHE.select(pos.isLong, tpLong, tpShort);
+
+ebool triggered = FHE.or(slFired, tpFired);
 FHE.makePubliclyDecryptable(triggered);
 ```
 
-The trigger price is never revealed to keepers — only whether it was hit.
+The keeper only learns `true/false`. The trigger price, direction, and position size are never revealed.
+
+### Encrypted Realized PnL Accumulation
+
+Each user's lifetime trading PnL is stored as a `euint64` ciphertext — a running encrypted total that survives across multiple position closes:
+
+```solidity
+// _accumulatePnl() — PnL history stays private across all trades
+function _accumulatePnl(address user, uint64 amount, bool isGain) internal {
+    euint64 current = _realizedPnl[user];
+    euint64 delta   = FHE.asEuint64(amount);
+    euint64 updated;
+    if (euint64.unwrap(current) == bytes32(0)) {
+        updated = isGain ? delta : FHE.asEuint64(0);
+    } else {
+        updated = isGain ? FHE.add(current, delta) : current; // losses don't decrease (floor 0)
+    }
+    FHE.allowThis(updated);
+    FHE.allow(updated, user); // only the trader can decrypt their own PnL history
+    _realizedPnl[user] = updated;
+}
+```
+
+Nobody — not the protocol, not other traders — can see your total profitability without your wallet's decryption key.
+
+### Liquidation: 2-Step Async (Same Pattern as Close)
+
+Liquidation follows the same async KMS pattern as position close — encrypted position data is marked publicly decryptable, the Zama KMS decrypts off-chain, then `fulfillLiquidation` verifies the proof and settles:
+
+```solidity
+// liquidatePosition() — keeper triggers, but sees nothing
+FHE.makePubliclyDecryptable(pos.size);
+FHE.makePubliclyDecryptable(pos.collateralUsed);
+FHE.makePubliclyDecryptable(pos.isLong);
+emit LiquidationRequested(user, positionId, msg.sender, requestId);
+
+// fulfillLiquidation() — KMS provides cleartext + proof
+FHE.checkSignatures(handles, abiEncodedCleartexts, decryptionProof);
+// PnL settled, collateral returned (minus penalty), position removed
+```
+
+The liquidator initiates but cannot frontrun or manipulate — they don't know the position size until the KMS decryption proof is submitted on-chain.
 
 ---
 
@@ -127,21 +243,21 @@ The trigger price is never revealed to keepers — only whether it was hit.
 │  useEncrypt() ─ Zama React SDK ─ wagmi/viem ─ MetaMask          │
 └────────────────────────────┬────────────────────────────────────┘
                              │ encrypted handles + inputProof
-                             ▼
+                             ▼ solidity contract
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Sepolia Testnet (fhEVM)                    │
 │                                                                 │
 │  ┌─────────────┐    ┌──────────────────┐    ┌───────────────┐   │
 │  │ Collateral  │◄───│ PerpetualFutures │───►│PositionManager│   │
-│  │   .sol      │    │      .sol        │    │    .sol       │   │
+│  │             │    │                  │    │               │   │
 │  └─────────────┘    └────────┬─────────┘    └───────────────┘   │
 │  ┌─────────────┐             │              ┌───────────────┐   │
-│  │LimitOrder   │◄────────────┤              │OptionsPool    │   │
-│  │  Book.sol   │             │              │    .sol       │   │
+│  │  LimitOrder │◄────────────┤              │  OptionsPool  │   │
+│  │  -Book      │             │              │               │   │
 │  └─────────────┘             │              └───────┬───────┘   │
 │  ┌─────────────┐    ┌────────▼─────────┐    ┌───────▼───────┐   │
-│  │OracleInteg. │◄───│  PricingEngine   │    │   Zama KMS    │   │
-│  │    .sol     │    │      .sol        │    │ (off-chain)   │   │
+│  │ OracleInteg │◄───│  PricingEngine   │    │   Zama KMS    │   │
+│  │             │    │                  │    │ (off-chain)   │   │
 │  └─────────────┘    └──────────────────┘    └───────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
