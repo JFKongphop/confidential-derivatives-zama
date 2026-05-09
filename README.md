@@ -44,16 +44,15 @@ Visible limit orders reveal your intended entry price, enabling spoofers to plac
 ---
 
 ## Contracts
-
-| Contract | Description |
+| Contract | Description | Address
 |---|---|
-| `Collateral.sol` | Encrypted USDC-style balance sheet. Deposits, withdrawals, and encrypted transfers. |
-| `PerpetualFutures.sol` | Leveraged perpetual futures. Encrypted size, collateral, direction, SL/TP, and PnL. |
-| `LimitOrderBook.sol` | Encrypted limit orders. Price, direction, and collateral hidden until fill. |
-| `OptionsPool.sol` | European call/put options. Strike price and direction encrypted after Black-Scholes. |
-| `PositionManager.sol` | NFT-based position store. All financial fields are FHE ciphertexts. |
-| `OracleIntegration.sol` | Chainlink ETH/USD wrapper (Sepolia). Public price feed. |
-| `PricingEngine.sol` | On-chain Black-Scholes approximation and settlement math. |
+| `Collateral.sol` | Encrypted USDC-style balance sheet. Deposits, withdrawals, and encrypted transfers. | 0x0B344e1936C479745c6fE6455d706961b91202B1 |
+| `PerpetualFutures.sol` | Leveraged perpetual futures. Encrypted size, collateral, direction, SL/TP, and PnL. | 0x0C8aeB7260B2ee7B54749e1bEE55e2108C562eD5 |
+| `LimitOrderBook.sol` | Encrypted limit orders. Price, direction, and collateral hidden until fill. | 0x8f882fF36f8f2Bf6cb1B270e4a7Dd1DeC80D3EE7 |
+| `OptionsPool.sol` | European call/put options. Strike price and direction encrypted after Black-Scholes. | 0xd86C56B6Ea88514A0CBf6FC9eB2d9eAE543D5f22 |
+| `PositionManager.sol` | NFT-based position store. All financial fields are FHE ciphertexts. | 0x5fdC9af999eEac90B03b2E6f49E06E1C4DA8A58F |
+| `OracleIntegration.sol` | Chainlink ETH/USD wrapper (Sepolia). Public price feed. | 0x0B344e1936C479745c6fE6455d706961b91202B1 |
+| `PricingEngine.sol` | On-chain Black-Scholes approximation and settlement math. | None
 
 ---
 
