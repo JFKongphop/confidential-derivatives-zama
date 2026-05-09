@@ -3,19 +3,22 @@ import "@nomicfoundation/hardhat-chai-matchers";
 import "@nomicfoundation/hardhat-ethers";
 import "@nomicfoundation/hardhat-verify";
 import "@typechain/hardhat";
+import * as dotenv from "dotenv";
 import "hardhat-deploy";
 import "hardhat-gas-reporter";
 import type { HardhatUserConfig } from "hardhat/config";
-import { vars } from "hardhat/config";
 import "solidity-coverage";
 
 import "./tasks/accounts";
 import "./tasks/FHECounter";
+import "./tasks/relayer";
 
-// Run 'npx hardhat vars setup' to see the list of variables that need to be set
+dotenv.config();
 
-const MNEMONIC: string = vars.get("MNEMONIC", "test test test test test test test test test test test junk");
-const INFURA_API_KEY: string = vars.get("INFURA_API_KEY", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+const MNEMONIC: string = process.env.MNEMONIC ?? "test test test test test test test test test test test junk";
+const PRIVATE_KEY: string | undefined = process.env.PRIVATE_KEY;
+const SEPOLIA_RPC_URL: string = process.env.SEPOLIA_RPC_URL ?? "https://rpc.sepolia.org";
+const ETHERSCAN_API_KEY: string = process.env.ETHERSCAN_API_KEY ?? "";
 
 const config: HardhatUserConfig = {
   defaultNetwork: "hardhat",
@@ -23,9 +26,7 @@ const config: HardhatUserConfig = {
     deployer: 0,
   },
   etherscan: {
-    apiKey: {
-      sepolia: vars.get("ETHERSCAN_API_KEY", ""),
-    },
+    apiKey: ETHERSCAN_API_KEY,
   },
   gasReporter: {
     currency: "USD",
@@ -49,13 +50,9 @@ const config: HardhatUserConfig = {
       url: "http://localhost:8545",
     },
     sepolia: {
-      accounts: {
-        mnemonic: MNEMONIC,
-        path: "m/44'/60'/0'/0/",
-        count: 10,
-      },
+      accounts: PRIVATE_KEY ? [PRIVATE_KEY] : { mnemonic: MNEMONIC, path: "m/44'/60'/0'/0/", count: 10 },
       chainId: 11155111,
-      url: `https://sepolia.infura.io/v3/${INFURA_API_KEY}`,
+      url: SEPOLIA_RPC_URL,
     },
   },
   paths: {
@@ -65,7 +62,7 @@ const config: HardhatUserConfig = {
     tests: "./test",
   },
   solidity: {
-    version: "0.8.27",
+    version: "0.8.30",
     settings: {
       metadata: {
         // Not including the metadata hash
@@ -78,6 +75,7 @@ const config: HardhatUserConfig = {
         enabled: true,
         runs: 800,
       },
+      viaIR: true,
       evmVersion: "cancun",
     },
   },
