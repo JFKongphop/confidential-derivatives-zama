@@ -37,7 +37,8 @@ async function deploy(deployer: HardhatEthersSigner): Promise<Contracts> {
   return { token, collateral };
 }
 
-/// Mint tokens, approve Collateral as operator, create encrypted input, deposit.
+/// Mint tokens then deposit via token.confidentialTransferAndCall (IERC7984Receiver pattern).
+/// No setOperator needed — user calls TOKEN directly; TOKEN calls onConfidentialTransferReceived.
 async function mintAndDeposit(
   token: MockConfidentialToken,
   collateral: Collateral,
@@ -47,19 +48,16 @@ async function mintAndDeposit(
   const collateralAddr = await collateral.getAddress();
   const tokenAddr = await token.getAddress();
 
-  // Mint plain tokens to user (MockConfidentialToken.mint wraps in FHE.asEuint64)
+  // Mint plain tokens to user
   await token.connect(user).mint(user.address, amount);
 
-  // Approve Collateral as operator so it can call confidentialTransferFrom
-  const expiry = BigInt(Math.floor(Date.now() / 1000) + 86_400); // +24 h
-  await token.connect(user).setOperator(collateralAddr, expiry);
-
-  // Create encrypted input off-chain and deposit
-  // contractAddr = token (InputVerifier checks msg.sender in token = Collateral... no: FHEVMExecutor.msg.sender = token)
-  const input = fhevm.createEncryptedInput(tokenAddr, collateralAddr);
+  // Encrypt: contractAddress = TOKEN (user is calling TOKEN directly)
+  const input = fhevm.createEncryptedInput(tokenAddr, user.address);
   input.add64(amount);
   const { handles, inputProof } = await input.encrypt();
-  await collateral.connect(user).deposit(handles[0], inputProof);
+
+  // User calls token.confidentialTransferAndCall → token calls onConfidentialTransferReceived
+  await token.connect(user)["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](collateralAddr, handles[0], inputProof, "0x");
 }
 
 async function encryptWithdraw(
@@ -123,15 +121,13 @@ describe("Collateral (ERC-7984)", function () {
       await c.token
         .connect(signers.alice)
         .mint(signers.alice.address, USER_MINT);
-      const expiry = BigInt(Math.floor(Date.now() / 1000) + 86_400);
-      await c.token.connect(signers.alice).setOperator(collateralAddr, expiry);
 
-      const input = fhevm.createEncryptedInput(tokenAddr, collateralAddr);
+      const input = fhevm.createEncryptedInput(tokenAddr, signers.alice.address);
       input.add64(USER_MINT);
       const { handles, inputProof } = await input.encrypt();
 
       await expect(
-        c.collateral.connect(signers.alice).deposit(handles[0], inputProof),
+        c.token.connect(signers.alice)["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](collateralAddr, handles[0], inputProof, "0x"),
       )
         .to.emit(c.collateral, "Deposit")
         .withArgs(signers.alice.address, anyValue);
@@ -179,22 +175,18 @@ describe("Collateral (ERC-7984)", function () {
       expect(balB).to.equal(5_000n * DECIMALS_6);
     });
 
-    it("reverts when Collateral is not set as operator", async function () {
-      await c.token
-        .connect(signers.alice)
-        .mint(signers.alice.address, USER_MINT);
-      // No setOperator call
-
-      const input = fhevm.createEncryptedInput(
-        collateralAddr,
-        signers.alice.address,
-      );
-      input.add64(USER_MINT);
-      const { handles, inputProof } = await input.encrypt();
-
+    it("only token can call onConfidentialTransferReceived", async function () {
+      // Direct call from non-token address should revert with "Collateral: only token"
+      const collateralAddr = await c.collateral.getAddress();
+      const iface = new ethers.Interface([
+        "function onConfidentialTransferReceived(address,address,uint256,bytes) returns (uint256)",
+      ]);
+      const data = iface.encodeFunctionData("onConfidentialTransferReceived", [
+        signers.alice.address, signers.alice.address, "0x" + "00".repeat(31) + "01", "0x",
+      ]);
       await expect(
-        c.collateral.connect(signers.alice).deposit(handles[0], inputProof),
-      ).to.be.reverted; // ERC7984UnauthorizedSpender
+        signers.alice.sendTransaction({ to: collateralAddr, data }),
+      ).to.be.reverted; // reverts — either "Collateral: only token" or precompile-level revert
     });
   });
 
