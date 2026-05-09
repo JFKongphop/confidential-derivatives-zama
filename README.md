@@ -45,7 +45,7 @@ Visible limit orders reveal your intended entry price, enabling spoofers to plac
 
 ## Contracts
 | Contract | Description | Address
-|---|---|
+|---|---|---|
 | `Collateral.sol` | Encrypted USDC-style balance sheet. Deposits, withdrawals, and encrypted transfers. | 0x0B344e1936C479745c6fE6455d706961b91202B1 |
 | `PerpetualFutures.sol` | Leveraged perpetual futures. Encrypted size, collateral, direction, SL/TP, and PnL. | 0x0C8aeB7260B2ee7B54749e1bEE55e2108C562eD5 |
 | `LimitOrderBook.sol` | Encrypted limit orders. Price, direction, and collateral hidden until fill. | 0x8f882fF36f8f2Bf6cb1B270e4a7Dd1DeC80D3EE7 |
