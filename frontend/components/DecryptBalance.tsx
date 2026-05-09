@@ -37,12 +37,16 @@ export function DecryptBalance({ handle }: Props) {
   const [decryptKey, setDecryptKey] = useState(0); // bump to force re-decrypt
   const prevHandle = useRef(handle);
 
-  // If the handle ever changes (new deposit/withdraw), reset so user re-decrypts fresh value
+  // If the handle ever changes (new deposit/withdraw/trade), auto-re-decrypt if already unlocked
   useEffect(() => {
     if (prevHandle.current !== handle) {
       prevHandle.current = handle;
-      setClicked(false);
-      setDecryptKey(k => k + 1);
+      // If not clicked yet, nothing to do — button will appear when user wants
+      // If already showing decrypted value, keep clicked=true so it auto-re-decrypts with new handle
+      if (!handle || handle === NULL_HANDLE) {
+        setClicked(false);
+      }
+      // else: clicked stays true → useUserDecrypt re-runs automatically with new handle key
     }
   }, [handle]);
 
