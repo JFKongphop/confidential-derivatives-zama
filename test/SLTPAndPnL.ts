@@ -22,6 +22,8 @@ import {
   Collateral__factory,
   MockConfidentialToken,
   MockConfidentialToken__factory,
+  MockOracleIntegration,
+  MockOracleIntegration__factory,
   MockPriceFeed,
   MockPriceFeed__factory,
   OracleIntegration,
@@ -55,7 +57,7 @@ type Signers = {
 interface Contracts {
   token: MockConfidentialToken;
   feed: MockPriceFeed;
-  oracle: OracleIntegration;
+  oracle: MockOracleIntegration;
   collateral: Collateral;
   positionManager: PositionManager;
   futures: PerpetualFutures;
@@ -66,7 +68,7 @@ interface Contracts {
 async function deployAll(deployer: HardhatEthersSigner): Promise<Contracts> {
   const token = await new MockConfidentialToken__factory(deployer).deploy();
   const feed = await new MockPriceFeed__factory(deployer).deploy(INITIAL_PRICE);
-  const oracle = await new OracleIntegration__factory(deployer).deploy(
+  const oracle = await new MockOracleIntegration__factory(deployer).deploy(
     await feed.getAddress(),
   );
   const collateral = await new Collateral__factory(deployer).deploy(
@@ -93,13 +95,12 @@ async function mintAndDeposit(
 ) {
   const collateralAddr = await collateral.getAddress();
   const tokenAddr = await token.getAddress();
-  const until = BigInt(Math.floor(Date.now() / 1000) + 86400 * 365);
   await token.mint(user.address, amount);
-  await token.connect(user).setOperator(collateralAddr, until);
-  const input = fhevm.createEncryptedInput(tokenAddr, collateralAddr);
+  // user calls TOKEN directly — TOKEN verifies proof then calls onConfidentialTransferReceived
+  const input = fhevm.createEncryptedInput(tokenAddr, user.address);
   input.add64(amount);
   const { handles, inputProof } = await input.encrypt();
-  await collateral.connect(user).deposit(handles[0], inputProof);
+  await token.connect(user)["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](collateralAddr, handles[0], inputProof, "0x");
 }
 
 async function encryptOpenPosition(
