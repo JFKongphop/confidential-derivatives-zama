@@ -43,16 +43,17 @@ Visible limit orders reveal your intended entry price, enabling spoofers to plac
 
 ---
 
-## Contracts
-| Contract | Description | Address
+## Contracts (Sepolia)
+
+| Contract | Description | Address |
 |---|---|---|
-| `Collateral.sol` | Encrypted USDC-style balance sheet. Deposits, withdrawals, and encrypted transfers. | 0x0B344e1936C479745c6fE6455d706961b91202B1 |
-| `PerpetualFutures.sol` | Leveraged perpetual futures. Encrypted size, collateral, direction, SL/TP, and PnL. | 0x0C8aeB7260B2ee7B54749e1bEE55e2108C562eD5 |
-| `LimitOrderBook.sol` | Encrypted limit orders. Price, direction, and collateral hidden until fill. | 0x8f882fF36f8f2Bf6cb1B270e4a7Dd1DeC80D3EE7 |
-| `OptionsPool.sol` | European call/put options. Strike price and direction encrypted after Black-Scholes. | 0xd86C56B6Ea88514A0CBf6FC9eB2d9eAE543D5f22 |
-| `PositionManager.sol` | NFT-based position store. All financial fields are FHE ciphertexts. | 0x5fdC9af999eEac90B03b2E6f49E06E1C4DA8A58F |
-| `OracleIntegration.sol` | Chainlink ETH/USD wrapper (Sepolia). Public price feed. | 0x0B344e1936C479745c6fE6455d706961b91202B1 |
-| `PricingEngine.sol` | On-chain Black-Scholes approximation and settlement math. | None
+| `MockConfidentialToken.sol` | Test cWETH token used as collateral. | [0x6f24661b6cbD306EfC02EE9442196cB7a322799c](https://sepolia.etherscan.io/address/0x6f24661b6cbD306EfC02EE9442196cB7a322799c) |
+| `Collateral.sol` | Encrypted collateral balance sheet. Deposits, withdrawals, and encrypted transfers. | [0x44D5F2270D4C23e515ecA30f5f43b843946486D8](https://sepolia.etherscan.io/address/0x44D5F2270D4C23e515ecA30f5f43b843946486D8) |
+| `OracleIntegration.sol` | Chainlink ETH/USD wrapper (Sepolia). Public price feed. | [0x88CC08903cC00649D4b3d834d27F0C1f48244ec9](https://sepolia.etherscan.io/address/0x88CC08903cC00649D4b3d834d27F0C1f48244ec9) |
+| `PositionManager.sol` | NFT-based position store. All financial fields are FHE ciphertexts. | [0xC132934ea1Fac171D2DE32955c30B9467Fe639bf](https://sepolia.etherscan.io/address/0xC132934ea1Fac171D2DE32955c30B9467Fe639bf) |
+| `PerpetualFutures.sol` | Leveraged perpetual futures. Encrypted size, collateral, direction, SL/TP, and PnL. | [0xb804c98c8Dadc17279e8791e0800afFA99486Ca8](https://sepolia.etherscan.io/address/0xb804c98c8Dadc17279e8791e0800afFA99486Ca8) |
+| `LimitOrderBook.sol` | Encrypted limit orders. Price, direction, and collateral hidden until fill. | [0xD0630a0ACF3705Eb0499477F63BB307c33A26763](https://sepolia.etherscan.io/address/0xD0630a0ACF3705Eb0499477F63BB307c33A26763) |
+| `OptionsPool.sol` | European call/put options. Strike price and direction encrypted after Black-Scholes. | [0xE54c41e63D87b5928E11b9B5BE10ee08Baf98506](https://sepolia.etherscan.io/address/0xE54c41e63D87b5928E11b9B5BE10ee08Baf98506) |
 
 ---
 
