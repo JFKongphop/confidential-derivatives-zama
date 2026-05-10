@@ -47,12 +47,25 @@ Visible limit orders reveal your intended entry price, enabling spoofers to plac
 
 ---
 
+## Token Standard — ERC-7984
+
+All collateral in this protocol is denominated in **cWETH**, an [ERC-7984](https://eips.ethereum.org/EIPS/eip-7984) confidential token. ERC-7984 is an encrypted-balance token standard (analogous to ERC-20 but for fhEVM) where:
+
+- **Balances are `euint64` ciphertexts** — the chain never sees a plaintext amount.
+- **Transfers are encrypted** — `confidentialTransfer` and `confidentialTransferAndCall` carry encrypted handles, not plaintext values.
+- **`IERC7984Receiver`** — contracts that accept confidential deposits implement this interface (used by `Collateral.sol`).
+
+`ConfidentialWETHWrapper.sol` wraps a standard ERC-20 WETH at 1:1 into ERC-7984 cWETH, using OpenZeppelin's [`ERC7984ERC20Wrapper`](https://github.com/OpenZeppelin/openzeppelin-confidential-contracts). Once wrapped, every downstream operation — depositing collateral, opening positions, settling PnL — works entirely over encrypted handles.
+
+---
+
 ## Contracts (Sepolia)
 
 | Contract | Description | Address |
 |---|---|---|
 | `MockConfidentialToken.sol` | Test cWETH token used as collateral. | [0x6f24661b6cbD306EfC02EE9442196cB7a322799c](https://sepolia.etherscan.io/address/0x6f24661b6cbD306EfC02EE9442196cB7a322799c) |
-| `Collateral.sol` | Encrypted collateral balance sheet. Deposits, withdrawals, and encrypted transfers. | [0x44D5F2270D4C23e515ecA30f5f43b843946486D8](https://sepolia.etherscan.io/address/0x44D5F2270D4C23e515ecA30f5f43b843946486D8) |
+| `ConfidentialWETHWrapper.sol` | Wraps plain WETH into an [ERC-7984](https://eips.ethereum.org/EIPS/eip-7984) confidential token (cWETH) at 1:1. Balances and transfers are fully encrypted via fhEVM. | [0x9062Df4A13802F1D76B58AB64789Cc1e0D378458](https://sepolia.etherscan.io/address/0x9062Df4A13802F1D76B58AB64789Cc1e0D378458) |
+| `Collateral.sol` | Encrypted collateral balance sheet. Accepts ERC-7984 deposits via `confidentialTransferAndCall`; balances stored as `euint64` ciphertexts. | [0x44D5F2270D4C23e515ecA30f5f43b843946486D8](https://sepolia.etherscan.io/address/0x44D5F2270D4C23e515ecA30f5f43b843946486D8) |
 | `OracleIntegration.sol` | Chainlink ETH/USD wrapper (Sepolia). Public price feed. | [0x88CC08903cC00649D4b3d834d27F0C1f48244ec9](https://sepolia.etherscan.io/address/0x88CC08903cC00649D4b3d834d27F0C1f48244ec9) |
 | `PositionManager.sol` | NFT-based position store. All financial fields are FHE ciphertexts. | [0xC132934ea1Fac171D2DE32955c30B9467Fe639bf](https://sepolia.etherscan.io/address/0xC132934ea1Fac171D2DE32955c30B9467Fe639bf) |
 | `PerpetualFutures.sol` | Leveraged perpetual futures. Encrypted size, collateral, direction, SL/TP, and PnL. | [0xb804c98c8Dadc17279e8791e0800afFA99486Ca8](https://sepolia.etherscan.io/address/0xb804c98c8Dadc17279e8791e0800afFA99486Ca8) |
