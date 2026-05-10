@@ -2,6 +2,10 @@
 
 A fully on-chain derivatives protocol — perpetual futures, options, and a limit order book — where every sensitive trading value is encrypted using Fully Homomorphic Encryption (FHE) via [fhEVM](https://github.com/zama-ai/fhevm) by Zama.
 
+## Demo
+
+[![Confidential Derivatives Demo](https://img.youtube.com/vi/pKhHT40tg6s/maxresdefault.jpg)](https://youtu.be/pKhHT40tg6s?si=QgahvZQWw07TTnT5)
+
 Position sizes, collateral, direction, strike prices, stop-loss/take-profit levels, and realized PnL are all stored as encrypted ciphertexts. The EVM computes over them without ever seeing the plaintext.
 
 ---
