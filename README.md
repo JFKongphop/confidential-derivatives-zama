@@ -1,5 +1,11 @@
 # Confidential Derivatives — FHE on-chain derivatives protocol
 
+> **🏆 Special Bounty Track Winner — [Zama Developer Program Mainnet Season 2](https://www.zama.org/post/announcing-the-developer-program-mainnet-season-2-winners#:~:text=Special%20Bounty%20Track,watching%20the%20chain)**
+>
+> *"Derivatives are where transparent ledgers hurt the most, because a visible position is a position that can be hunted. Confidential Derivatives brings the full stack onchain: perpetuals, options, and a central limit order book, with positions, collateral, and strikes all encrypted under FHE. Traders get the composability of onchain markets without broadcasting their book to every liquidation bot watching the chain."*
+>
+> — Zama, May 28, 2026
+
 A fully on-chain derivatives protocol — perpetual futures, options, and a limit order book — where every sensitive trading value is encrypted using Fully Homomorphic Encryption (FHE) via [fhEVM](https://github.com/zama-ai/fhevm) by Zama.
 
 ## Demo
